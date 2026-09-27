@@ -69,7 +69,7 @@ chk(defs.notificationsEnabled, "settings: notifications enabled by default")
 chk(defs.notifyFailures && defs.notifyRecovery && defs.notifyBuilds && defs.notifyPressure,
     "settings: all notification categories on by default")
 
-let custom = AppSettings(browser: "Firefox", analysisModel: "claude-opus-4-8",
+let custom = AppSettings(browser: "Firefox", analysisModel: "claude-opus-5-5",
                          autoCloseOrphans: false, defaultMemoryGB: 8,
                          notificationsEnabled: false, notifyFailures: false, notifyPressure: false)
 guard let sData = try? JSONEncoder().encode(custom),
@@ -77,6 +77,22 @@ guard let sData = try? JSONEncoder().encode(custom),
     print("FAIL model: AppSettings round-trip failed"); exit(1)
 }
 chk(sBack == custom, "settings: round-trip preserves all fields")
+
+// Retired model IDs (settings saved by an older build) move to the current model of the same tier —
+// otherwise the picker shows nothing and every `claude --model` call fails.
+func savedModel(_ id: String) -> String {
+    let json = "{\"analysisModel\":\"\(id)\"}".data(using: .utf8)!
+    return (try? dec.decode(AppSettings.self, from: json))?.analysisModel ?? "<decode failed>"
+}
+let tierID = { (tier: String) in AppSettings.models.first { $0.id.contains(tier) }!.id }
+chk(savedModel("claude-sonnet-4-6") == tierID("sonnet"), "settings: stale sonnet → current sonnet", savedModel("claude-sonnet-4-6"))
+chk(savedModel("claude-opus-4-8") == tierID("opus"), "settings: stale opus → current opus", savedModel("claude-opus-4-8"))
+chk(savedModel("claude-haiku-4-5") == tierID("haiku"), "settings: undated haiku → dated haiku", savedModel("claude-haiku-4-5"))
+chk(savedModel("gpt-4") == AppSettings.defaultModel, "settings: unknown model → default")
+chk(savedModel("") == AppSettings.defaultModel, "settings: empty model → default")
+for m in AppSettings.models {
+    chk(savedModel(m.id) == m.id, "settings: current model kept as-is (\(m.id))")
+}
 
 // ── Project.effectiveHealthPath: defaults to "/", normalizes a leading slash (A6). ──
 chk(Project(name: "h", path: "/tmp/h").effectiveHealthPath == "/", "health: unset → /")

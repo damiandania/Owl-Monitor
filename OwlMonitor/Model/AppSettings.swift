@@ -78,7 +78,7 @@ struct AppSettings: Codable, Sendable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         browser = try c.decodeIfPresent(String.self, forKey: .browser)
         editor = try c.decodeIfPresent(String.self, forKey: .editor)
-        analysisModel = try c.decodeIfPresent(String.self, forKey: .analysisModel) ?? AppSettings.defaultModel
+        analysisModel = AppSettings.currentModel(for: try c.decodeIfPresent(String.self, forKey: .analysisModel))
         autoCloseOrphans = try c.decodeIfPresent(Bool.self, forKey: .autoCloseOrphans) ?? true
         defaultMemoryGB = try c.decodeIfPresent(Int.self, forKey: .defaultMemoryGB) ?? 4
         bars = try c.decodeIfPresent([String].self, forKey: .bars) ?? AppSettings.defaultBars
@@ -94,7 +94,7 @@ struct AppSettings: Codable, Sendable, Equatable {
         notifyWebhookURL = try c.decodeIfPresent(String.self, forKey: .notifyWebhookURL) ?? ""
     }
 
-    static let defaultModel = "claude-haiku-4-5"
+    static let defaultModel = "claude-haiku-4-5-20251001"
 
     /// Appearance options for the theme picker.
     struct ThemeOption: Identifiable, Sendable { let id: String; let label: String; let icon: String }
@@ -142,10 +142,23 @@ struct AppSettings: Codable, Sendable, Equatable {
     /// Models offered for analysis (newest Claude family).
     struct ModelOption: Identifiable, Sendable { let id: String; let label: String }
     static let models: [ModelOption] = [
-        .init(id: "claude-haiku-4-5", label: "Haiku 4.5 — fast (default)"),
-        .init(id: "claude-sonnet-4-6", label: "Sonnet 4.6 — balanced"),
-        .init(id: "claude-opus-4-8", label: "Opus 4.8 — deep"),
+        .init(id: "claude-haiku-4-5-20251001", label: "Haiku 4.5 — fast (default)"),
+        .init(id: "claude-sonnet-5", label: "Sonnet 5 — balanced"),
+        .init(id: "claude-opus-5-5", label: "Opus 5.5 — deep"),
     ]
+
+    /// A saved model ID mapped onto today's list. IDs retire as new models ship, and a retired one
+    /// would leave the picker blank and make every `claude --model` call fail — so a stale ID moves
+    /// to the newest model of the SAME tier (an old Sonnet becomes the current Sonnet), and anything
+    /// unrecognisable falls back to the default.
+    static func currentModel(for saved: String?) -> String {
+        guard let saved, !saved.isEmpty else { return defaultModel }
+        if models.contains(where: { $0.id == saved }) { return saved }
+        for tier in ["haiku", "sonnet", "opus"] where saved.contains(tier) {
+            if let match = models.first(where: { $0.id.contains(tier) }) { return match.id }
+        }
+        return defaultModel
+    }
 
     /// Activity bars: CPU/Memory/Swap/Temperature on by default; the rest are optional.
     static let defaultBars = ["cpu", "memory", "swap", "temp"]
