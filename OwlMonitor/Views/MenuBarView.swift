@@ -196,6 +196,10 @@ private struct ControlRowView: View {
             if let started = control.startedAt, showsStop {
                 Text("· \(MenuBarView.uptime(since: started))").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
             }
+            // Which port it's on, so a glance answers "where is it?" without opening the window.
+            if let port = control.port, showsStop {
+                Text(verbatim: "· :\(port)").font(.caption2.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
+            }
             Spacer(minLength: 4)
             Button(action: control.onToggle) {
                 Image(systemName: showsStop ? "stop.fill" : "play.fill")
