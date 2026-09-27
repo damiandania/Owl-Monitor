@@ -276,6 +276,72 @@ func runSessionTests() async -> Int {
         check("tree: spawn succeeded", false, "spawn failed")
     }
 
+    // A leader that dies FIRST must not leave its children behind: they're reparented to launchd and
+    // would keep the port and RAM. handleExit sweeps the tree, which only works because sessionMembers
+    // falls back to the dead leader's pid as the session id.
+    let crashy = Project(name: "crashy", path: "/tmp",
+                         devCommand: "sh -c 'sleep 57 & echo CHILD=$!; exit 3'", memoryGB: 1)
+    let crashSession = DevSession(project: crashy)
+    crashSession.start(memoryGB: 1)
+    var childPid: pid_t = 0
+    for _ in 0..<40 where childPid == 0 {
+        try? await Task.sleep(for: .milliseconds(100))
+        if let line = crashSession.logLines.first(where: { $0.hasPrefix("CHILD=") }) {
+            childPid = pid_t(line.dropFirst("CHILD=".count).trimmingCharacters(in: .whitespaces)) ?? 0
+        }
+    }
+    check("orphan: crashing leader reported its child", childPid > 0)
+    if childPid > 0 {
+        try? await Task.sleep(for: .seconds(1.5))
+        let swept = kill(childPid, 0) != 0
+        check("orphan: child of a crashed leader is swept, not left running", swept,
+              swept ? "" : "pid \(childPid) still alive")
+        if kill(childPid, 0) == 0 { kill(childPid, SIGKILL) }
+    }
+    crashSession.stop()
+
+    // Port probe: sees IPv4 and IPv6-only listeners, and a closed port reads free.
+    func listener(ipv6: Bool) -> (fd: Int32, port: Int) {
+        let fd = socket(ipv6 ? AF_INET6 : AF_INET, SOCK_STREAM, 0)
+        var on: Int32 = 1
+        if ipv6 { setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &on, socklen_t(MemoryLayout<Int32>.size)) }
+        var bound: Int32 = -1
+        if ipv6 {
+            var a = sockaddr_in6(); a.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
+            a.sin6_family = sa_family_t(AF_INET6); a.sin6_addr = in6addr_loopback
+            bound = withUnsafePointer(to: &a) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in6>.size)) } }
+        } else {
+            var a = sockaddr_in(); a.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            a.sin_family = sa_family_t(AF_INET); a.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+            bound = withUnsafePointer(to: &a) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+        }
+        guard bound == 0, listen(fd, 4) == 0 else { close(fd); return (-1, 0) }
+        var ss = sockaddr_storage(); var len = socklen_t(MemoryLayout<sockaddr_storage>.size)
+        _ = withUnsafeMutablePointer(to: &ss) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            getsockname(fd, $0, &len) } }
+        let port = withUnsafePointer(to: &ss) { p -> Int in
+            ipv6 ? p.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { Int(UInt16(bigEndian: $0.pointee.sin6_port)) }
+                 : p.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { Int(UInt16(bigEndian: $0.pointee.sin_port)) }
+        }
+        return (fd, port)
+    }
+    let v4 = listener(ipv6: false)
+    check("port: IPv4 listener detected", v4.fd >= 0 && DevSession.isPortInUse(v4.port), "port \(v4.port)")
+    check("port: firstFreePort skips a taken port",
+          DevSession.firstFreePort(from: v4.port, avoiding: []) != v4.port)
+    close(v4.fd)
+    check("port: a closed port reads free", !DevSession.isPortInUse(v4.port), "port \(v4.port)")
+    check("port: firstFreePort returns the start when it's free",
+          DevSession.firstFreePort(from: v4.port, avoiding: []) == v4.port)
+    check("port: firstFreePort skips a port reserved by a sibling session",
+          DevSession.firstFreePort(from: v4.port, avoiding: [v4.port]) != v4.port)
+    let v6 = listener(ipv6: true)
+    check("port: IPv6-only listener detected (Vite/Astro bind ::1)", v6.fd >= 0 && DevSession.isPortInUse(v6.port),
+          "port \(v6.port)")
+    close(v6.fd)
+
     return failures
 }
 

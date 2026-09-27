@@ -120,6 +120,9 @@ final class IPCServer {
             guard let toLaunch = app.projects.first(where: { $0.id == project.id }) else {
                 IPCIO.write(client, IPCMessage(type: "error", message: "project vanished before launch")); return
             }
+            // Resolve the login-shell PATH off the main thread (the CLI is waiting on us anyway), so
+            // the launch itself doesn't freeze the UI on it — see ShellEnvironment.
+            await ShellEnvironment.refresh()
             app.launch(toLaunch)
             // Surface when the requested/auto heap was capped to physical RAM, so an explicit
             // `--gb 99` on an 8 GB machine reports "8 GB (capped …)" instead of silently shrinking.
@@ -154,6 +157,7 @@ final class IPCServer {
             guard let toLaunch = app.projects.first(where: { $0.id == project.id }) else {
                 IPCIO.write(client, IPCMessage(type: "error", message: "project vanished before launch")); return
             }
+            await ShellEnvironment.refresh()   // off the main thread — see the `up` case
             app.startPreview(toLaunch)
             let gb = app.effectiveBuildMemoryGB(for: toLaunch)
             IPCIO.write(client, IPCMessage(type: "ok", message: "launched \(toLaunch.name) preview (\(gb) GB)"))
@@ -200,6 +204,7 @@ final class IPCServer {
                     message: "no project tracked for this path — run 'up' here first")); return
             }
             app.selectedProjectID = project.id
+            await ShellEnvironment.refresh()   // off the main thread — see the `up` case
             if let session = app.sessions[project.id], session.state.isActive {
                 session.recycle()
                 IPCIO.write(client, IPCMessage(type: "ok", message: "restarting \(project.name)"))

@@ -329,6 +329,74 @@ int dm_proc_is_system(pid_t pid) {
     return 0;
 }
 
+int dm_proc_env_value(pid_t pid, const char *key, char *buf, int size) {
+    if (size <= 0 || key == NULL) {
+        return -1;
+    }
+    buf[0] = '\0';
+
+    int argmax = 0;
+    size_t sz = sizeof(argmax);
+    int mib_max[2] = { CTL_KERN, KERN_ARGMAX };
+    if (sysctl(mib_max, 2, &argmax, &sz, NULL, 0) != 0 || argmax <= 0) {
+        return -1;
+    }
+    char *procargs = (char *)malloc((size_t)argmax);
+    if (procargs == NULL) {
+        return -1;
+    }
+    int mib[3] = { CTL_KERN, KERN_PROCARGS2, (int)pid };
+    size_t len = (size_t)argmax;
+    if (sysctl(mib, 3, procargs, &len, NULL, 0) != 0 || len < sizeof(int)) {
+        free(procargs);
+        return -1;
+    }
+
+    // Layout: argc | exec_path \0 | padding \0… | argv[0] \0 … argv[argc-1] \0 | envp[0] \0 …
+    int argc = 0;
+    memcpy(&argc, procargs, sizeof(argc));
+    char *cp = procargs + sizeof(argc);
+    char *end = procargs + len;
+    while (cp < end && *cp != '\0') cp++;          // exec_path
+    while (cp < end && *cp == '\0') cp++;          // padding
+    for (int i = 0; i < argc && cp < end; i++) {   // argv — skip past each string
+        while (cp < end && *cp != '\0') cp++;
+        cp++;
+    }
+
+    // envp, one "KEY=value" per string. NULs are SKIPPED, not treated as the end: a process that
+    // rewrites its own title (Node's process.title — `npm run dev`, `next-server`) overwrites argv[0]
+    // and zero-fills the rest of its original argv block, leaving a run of NULs longer than argc
+    // strings. Stopping at the first empty string made those processes' environment look empty —
+    // hiding the ownership tag on exactly the `npm run dev` leaders that are the root of an orphaned
+    // tree. (argv is still skipped by argc above, so an argument can never be read as a variable.)
+    size_t klen = strlen(key);
+    int result = -1;
+    int envc = 0;
+    while (cp < end) {
+        if (*cp == '\0') { cp++; continue; }
+        char *s = cp;
+        while (cp < end && *cp != '\0') cp++;
+        envc++;
+        if ((size_t)(cp - s) > klen && strncmp(s, key, klen) == 0 && s[klen] == '=') {
+            const char *v = s + klen + 1;
+            int n = (int)(cp - v);
+            if (n > size - 1) n = size - 1;
+            memcpy(buf, v, (size_t)n);
+            buf[n] = '\0';
+            result = n;
+            break;
+        }
+        cp++;
+    }
+    free(procargs);
+    // No variables at all: macOS strips the environment of Apple platform binaries (sh, make, sleep…)
+    // from KERN_PROCARGS2 even for the same user, so "absent" can't be told from "hidden" here —
+    // report it apart, so a caller can look for the tag elsewhere (see OrphanReaper).
+    if (result < 0 && envc == 0) return -2;
+    return result;
+}
+
 int dm_proc_args(pid_t pid, char *buf, int size) {
     if (size <= 0) {
         return 0;

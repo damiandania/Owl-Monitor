@@ -20,6 +20,12 @@ final class PressureManager {
     /// True for the duration of one stuck episode — so the "under pressure" notification fires once
     /// (not every refresh) and "recovered" only fires if we actually warned.
     @ObservationIgnored private var notified = false
+    /// When Claude last refined the kill suggestions. A refinement spawns a whole `claude -p` — a
+    /// node runtime of 100+ MB plus an API call — which is exactly what a machine under memory
+    /// pressure can't spare, and the build's pressure watch used to trigger one every few seconds for
+    /// the entire build. Claude now weighs in at most once per `refinementInterval`.
+    @ObservationIgnored private var lastRefinement = Date.distantPast
+    private static let refinementInterval: TimeInterval = 180
 
     @ObservationIgnored private unowned let app: AppState
     private var sampler: SystemSampler { app.systemSampler }
@@ -80,8 +86,19 @@ final class PressureManager {
     /// server still launching (whose tree isn't enumerable yet, so it isn't aggregated out and would
     /// otherwise look like an orphan dev server and get SIGKILLed mid-launch).
     private var managedPids: Set<Int32> {
-        let leaders = Array(app.sessions.values) + Array(app.previews.values)
-        return Set(leaders.flatMap { [$0.pid] + ProcessTree.sessionMembers(of: $0.pid) }.filter { $0 > 0 })
+        // Builds and workers too: a build is exactly what drives a machine into pressure, and it used
+        // to be left out — only a "build" token in its argv kept its processes from looking orphaned.
+        let leaders = app.sessions.values.map(\.pid) + app.previews.values.map(\.pid)
+            + app.builds.values.map(\.pid) + app.workers.values.map(\.pid)
+        return Set(leaders.flatMap { [$0] + ProcessTree.sessionMembers(of: $0) }.filter { $0 > 0 })
+    }
+
+    /// Whether `pid` carries Owl Monitor's ownership tag — i.e. it's one of OUR trees. Those are never
+    /// this heuristic's business: a supervised one must be left alone, and an orphaned one is
+    /// OrphanReaper's (which knows exactly what it was, and can bring it back).
+    private static func isOwnedByUs(_ pid: Int32) -> Bool {
+        var value = [CChar](repeating: 0, count: 128)
+        return dm_proc_env_value(pid, ProcessSupport.ownershipKey, &value, Int32(value.count)) > 0
     }
 
     /// Auto-close ORPHANED dev processes — a dev server (by its binary in argv) that isn't part of a
@@ -96,6 +113,7 @@ final class PressureManager {
                 && !row.name.localizedCaseInsensitiveContains("Helper")
                 && !ResourceAdvisor.isProtected(row.name)
                 && ResourceAdvisor.looksLikeDevServer(argv: AppState.argv(of: row.id))
+                && !Self.isOwnedByUs(row.id)
         }
         guard !orphans.isEmpty else { return }
         orphans.forEach { AppState.killPid($0.id) }
@@ -114,6 +132,13 @@ final class PressureManager {
             .map { .init(pid: $0.id, name: $0.name, cpuPerCore: $0.cpuPerCore,
                          memMB: $0.memBytes / 1_048_576, managedDev: $0.isDevServer) }
         killSuggestions = ResourceAdvisor.heuristicKills(procs: procs)
+        // The instant heuristic above refreshes every time; Claude's refinement only every few
+        // minutes (see `refinementInterval`).
+        guard Date().timeIntervalSince(lastRefinement) >= Self.refinementInterval else {
+            isEvaluating = false
+            return
+        }
+        lastRefinement = Date()
         let cpu = s.systemCPU, mem = s.systemMemPercent, swap = s.systemSwapPercent, cores = s.coreCount
         let model = app.settings.analysisModel
         Task { [weak self] in

@@ -42,11 +42,15 @@ extension AppState {
         let pausedServerIDs = pauseActiveServersForBuild(buildName: project.name, excluding: project.id)
         defer { relaunchPausedServers(pausedServerIDs) }
 
-        // RAM relief for the build — the whole point of this app on small Macs. (1) purge inactive/
-        // cached system memory, (2) surface the resource advisor so heavy non-essential apps can be
-        // closed (user-confirmed), (3) keep relieving pressure during the build so we act BEFORE the
-        // kernel jetsams it (SIGKILL) once swap fills up.
-        await Task.detached { Self.purgeSystemMemory() }.value
+        // RAM relief for the build — the whole point of this app on small Macs. (1) the other
+        // projects' servers were stopped above, (2) surface the resource advisor so heavy
+        // non-essential apps can be closed (user-confirmed), (3) keep relieving pressure during the
+        // build so we act BEFORE the kernel jetsams it (SIGKILL) once swap fills up.
+        //
+        // There used to be a `purge` here too. It never worked: `/usr/sbin/purge` needs root and
+        // exits with "Operation not permitted" for a normal app (so does `memory_pressure -S`) —
+        // it only spawned a process that failed. A user-level app can't make macOS drop its caches;
+        // the one real lever is stopping processes, which is what (1) and (2) do.
         pressure.evaluate(focusTab: false)
         let pressureWatch = startBuildPressureWatch()
         defer { pressureWatch.cancel() }
@@ -84,14 +88,15 @@ extension AppState {
         }
     }
 
-    /// Keep relieving memory pressure while a build runs: every 5s, if the machine is tight, purge
-    /// and re-evaluate so we act before the kernel jetsams the build once swap fills up.
+    /// Keep relieving memory pressure while a build runs: every 5s, if the machine is tight,
+    /// re-evaluate (close unsupervised orphans, refresh the kill suggestions) so we act before the
+    /// kernel jetsams the build once swap fills up. Claude's part of that is throttled inside
+    /// PressureManager, so this loop no longer spawns a `claude -p` every few seconds.
     private func startBuildPressureWatch() -> Task<Void, Never> {
         Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
                 guard let self, self.systemSampler.systemMemPercent > 85 else { continue }
-                await Task.detached { Self.purgeSystemMemory() }.value
                 self.pressure.evaluate(focusTab: false)
             }
         }

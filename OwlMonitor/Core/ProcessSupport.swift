@@ -35,6 +35,18 @@ enum ProcessSupport {
         }
     }
 
+    /// The environment variable stamped on every tree Owl Monitor spawns — see `ownershipTag`.
+    static let ownershipKey = "OWL_MONITOR_PROJECT"
+
+    /// `OWL_MONITOR_PROJECT=<project id>:<kind> ` (kind: dev / preview / worker / build), prefixed to
+    /// every launch. Every descendant inherits it, so a process wearing it is CERTAINLY one of ours:
+    /// that's what lets `OrphanReaper` clean up zombie servers without guessing from command lines —
+    /// anything untagged (a server you started yourself, an editor, a launchd service) is never
+    /// touched. A UUID and a bare word are shell-safe, so no quoting is needed.
+    static func ownershipTag(projectID: UUID, kind: String) -> String {
+        "\(ownershipKey)=\(projectID.uuidString):\(kind) "
+    }
+
     /// The Node heap flag (`--max-old-space-size=<MB>`) injected via `NODE_OPTIONS`. Centralizes the
     /// GB→MB conversion both runners use; only `NODE_OPTIONS`-allowlisted flags work here (V8 flags
     /// like `--optimize-for-size` are rejected and make node exit immediately).

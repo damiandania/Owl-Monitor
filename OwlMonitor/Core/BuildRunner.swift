@@ -55,7 +55,7 @@ final class BuildRunner {
         // node exit immediately (code 9), failing every build. Keep it to --max-old-space-size.
         let nodeOpts = ProcessSupport.nodeHeapFlag(memoryGB: memoryGB)
         let userEnv = ProcessSupport.envAssignments(project.env)
-        let launch = "NODE_OPTIONS='\(nodeOpts)' FORCE_COLOR=0 exec \(buildCommand)"
+        let launch = "\(ProcessSupport.ownershipTag(projectID: project.id, kind: "build"))NODE_OPTIONS='\(nodeOpts)' FORCE_COLOR=0 exec \(buildCommand)"
         let command = "\(userEnv)\(launch)"
         let header = ProcessSupport.displayCommand(env: project.env, rest: launch, cwd: project.path)
         logLines = [header]
@@ -77,17 +77,22 @@ final class BuildRunner {
         process = proc
 
         let stream = proc.chunks   // captured by the consume task; does NOT retain `proc`
-        consumeTask = Task { @MainActor [weak self] in
+        consumeTask = Task { @MainActor [weak self, weak proc] in
             for await chunk in stream {
                 guard let self else { continue }
                 switch chunk {
                 case .data(let data): self.ingest(data)
-                case .eof: self.process?.cancelReader()
+                // This stream's own process, never `self.process` — see DevSession.start.
+                case .eof: proc?.cancelReader()
                 case .exit(let code): self.finish(code: code)
                 }
             }
         }
     }
+
+    /// Clear the on-screen log (⌘K). In-memory only: the full build log stays on disk, and it's
+    /// that file — not this buffer — that a failed `owl-monitor build` points the caller to.
+    func clearLog() { logLines.removeAll() }
 
     func stop() {
         guard pid > 0 else { return }
@@ -114,6 +119,11 @@ final class BuildRunner {
 
     private func finish(code: Int32) {
         process?.release()
+        // Sweep whatever outlived the build's leader: bundler workers and services (esbuild,
+        // Turbopack, a Next.js build worker) can linger after the leader exits — worse if it was
+        // killed — and a leftover one holds RAM the dev server relaunched next needs. See
+        // DevSession.handleExit, which does the same.
+        if pid > 0 { ProcessSupport.gracefulKillTree(pid) }
         pid = 0
         isRunning = false
         result = code

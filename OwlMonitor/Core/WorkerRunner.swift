@@ -57,7 +57,7 @@ final class WorkerRunner {
         // making its whole tree enumerable (by session) and killable (by killpg) — same as the server.
         let nodeOpts = ProcessSupport.nodeHeapFlag(memoryGB: memoryGB)
         let userEnv = ProcessSupport.envAssignments(project.env)
-        let launch = "NODE_OPTIONS=\(nodeOpts) FORCE_COLOR=1 exec \(baseCommand)"
+        let launch = "\(ProcessSupport.ownershipTag(projectID: project.id, kind: "worker"))NODE_OPTIONS=\(nodeOpts) FORCE_COLOR=1 exec \(baseCommand)"
         let command = "\(userEnv)\(launch)"
         append(line: ProcessSupport.displayCommand(env: project.env, rest: launch, cwd: project.path))
 
@@ -73,17 +73,21 @@ final class WorkerRunner {
         process = proc
 
         let stream = proc.chunks   // captured by the consume task; does NOT retain `proc`
-        consumeTask = Task { @MainActor [weak self] in
+        consumeTask = Task { @MainActor [weak self, weak proc] in
             for await chunk in stream {
                 guard let self else { continue }
                 switch chunk {
                 case .data(let data): self.ingest(data)
-                case .eof: self.process?.cancelReader()
+                // This stream's own process, never `self.process` — see DevSession.start.
+                case .eof: proc?.cancelReader()
                 case .exit(let code): self.finish(code: code)
                 }
             }
         }
     }
+
+    /// Clear the on-screen log (⌘K). In-memory only — the on-disk log is left intact.
+    func clearLog() { logLines.removeAll() }
 
     /// Send a line of input to the running worker's stdin (some workers accept commands).
     func sendInput(_ text: String) {
@@ -133,6 +137,9 @@ final class WorkerRunner {
 
     private func finish(code: Int32) {
         process?.release()
+        // Sweep whatever outlived the leader (a crashed leader's children are reparented to launchd
+        // and keep running) — see DevSession.handleExit, which does the same.
+        if pid > 0 { ProcessSupport.gracefulKillTree(pid) }
         pid = 0
         isRunning = false
         lastExitCode = code

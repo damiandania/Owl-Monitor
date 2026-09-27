@@ -85,6 +85,10 @@ build_run migration "$ROOT/tests/migration/main.swift" "$SRC/Core/LegacyMigratio
 build_run procsupport "$ROOT/tests/procsupport/main.swift" "$SRC/Core/ProcessSupport.swift" \
   "$SRC/Core/ProcessTree.swift" "$SRC/Model/Project.swift" "$SRC/Core/Detector.swift" \
   "$SRC/Core/HeapScaling.swift" "$SYS/metrics.c" "$SYS/spawn.c" -import-objc-header "$HDR"
+build_run orphans "$ROOT/tests/orphans/main.swift" "$SRC/Core/OrphanReaper.swift" \
+  "$SRC/Core/ProcessSupport.swift" "$SRC/Core/ProcessTree.swift" "$SRC/Model/Project.swift" \
+  "$SRC/Core/Detector.swift" "$SRC/Core/HeapScaling.swift" "$SYS/metrics.c" "$SYS/spawn.c" \
+  -import-objc-header "$HDR"
 build_run ipc    "$ROOT/tests/ipc/main.swift" "$SRC/Core/IPCIO.swift" "$SRC/Model/IPCProtocol.swift" \
   "$SYS/ipc.c" -import-objc-header "$HDR"
 

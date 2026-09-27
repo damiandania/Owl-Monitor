@@ -74,6 +74,12 @@ int dm_responsible_pid(pid_t pid);
 /// Used to tell apart generic helpers (e.g. which VS Code language server a "Code Helper" is).
 int dm_proc_args(pid_t pid, char *buf, int size);
 
+// Value of environment variable `key` in process `pid`, copied into `buf` (NUL-terminated). Returns
+// its length, or -1 when the variable is absent or the process is unreadable (KERN_PROCARGS2 only
+// exposes the environment of processes owned by the same user — which every tree we spawn is), or
+// -2 when the process shows no environment at all: macOS hides it for Apple platform binaries.
+int dm_proc_env_value(pid_t pid, const char *key, char *buf, int size);
+
 /// The TCP port a process is LISTENing on (e.g. a dev server's port), or 0 if none.
 /// Used to identify a dev server started outside the app (e.g. "MiddleSpace :3001").
 int dm_proc_listen_port(pid_t pid);
