@@ -17,6 +17,7 @@ struct LogPaneView: View {
     /// Cancels a pending "revert the copied checkmark" so rapid re-copies don't flicker back early.
     @State private var resetCopied: Task<Void, Never>? = nil
     @Environment(\.colorScheme) private var appScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Lines actually shown: filtered by the search query (matched against ANSI-stripped text).
     private var visibleLines: [String] { LogFilter.filter(lines, query: search) }
@@ -49,15 +50,20 @@ struct LogPaneView: View {
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(inputText)
                 if !search.isEmpty {
+                    // No rolling digits here on purpose: the counter tracks a live log that can emit
+                    // hundreds of lines a second, so it would never stop moving.
                     Text("\(shown.count)/\(lines.count)").font(.caption2).foregroundStyle(.secondary)
+                        .transition(.pop(reduceMotion: reduceMotion))
                     Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.plain).foregroundStyle(.secondary)
+                        .transition(.pop(reduceMotion: reduceMotion))
                 }
                 copyButton(shown)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(inputBg)
+            .animation(Motion.state(reduceMotion), value: search.isEmpty)
             Divider()
 
             // AppKit-backed so a click-drag can select across MANY lines (a stack of SwiftUI `Text`s
@@ -96,25 +102,28 @@ struct LogPaneView: View {
         .environment(\.colorScheme, dark ? .dark : .light)
     }
 
-    /// Copy-all button: pops to a green checkmark + "Copied" for a beat so the click registers.
+    /// Copy-all button: turns into a green checkmark + "Copied" for a beat, popping once as it does,
+    /// so the click registers. (It used to stay blown up to 115 % the whole time — a success is
+    /// confirmed by a brief pop that settles, not by a held enlargement.)
     @ViewBuilder private func copyButton(_ shown: [String]) -> some View {
         Button { copyAll(shown) } label: {
             HStack(spacing: 3) {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .contentTransition(.symbolEffect(.replace))
                 if copied {
                     Text("Copied").font(.caption2.weight(.medium))
-                        .transition(.opacity.combined(with: .move(edge: .trailing)))
+                        .transition(.rise(reduceMotion: reduceMotion))
                 }
             }
             .font(.caption)
             .foregroundStyle(copied ? Color.green : Color.secondary)
-            .scaleEffect(copied ? 1.15 : 1)
+            .pop(when: copied)
         }
         .buttonStyle(.plain)
         .help(search.isEmpty ? "Copy the whole log to the clipboard"
                              : "Copy the filtered log to the clipboard")
         .disabled(shown.isEmpty)
-        .animation(.spring(response: 0.3, dampingFraction: 0.55), value: copied)
+        .animation(Motion.state(reduceMotion), value: copied)
     }
 
     /// Put the shown lines (ANSI-stripped, so it pastes as plain text) on the clipboard and flash the
@@ -130,7 +139,7 @@ struct LogPaneView: View {
         resetCopied = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_300_000_000)
             guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.25)) { copied = false }
+            copied = false   // animated by the button's own `.animation(value: copied)`
         }
     }
 }

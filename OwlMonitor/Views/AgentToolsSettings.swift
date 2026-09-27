@@ -5,6 +5,7 @@ import AppKit
 /// one supervised project. The inventory is deliberately read-only except for existing skill actions.
 struct AgentToolsSettings: View {
     @Environment(AppState.self) private var app
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var scope: Scope = .global
     @State private var category: Category = .skills
     @State private var snapshot = AgentToolCatalog.Snapshot()
@@ -123,7 +124,7 @@ struct AgentToolsSettings: View {
     ) -> some View {
         let isSelected = category == item
         return Button {
-            withAnimation(.easeInOut(duration: 0.18)) {
+            withAnimation(Motion.state(reduceMotion)) {
                 category = item
             }
         } label: {

@@ -6,6 +6,7 @@ struct ProjectSidebar: View {
     @State private var importing = false
     /// Parent-folder paths the user has collapsed. Empty ⇒ every group expanded (the default).
     @State private var collapsed: Set<String> = []
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         @Bindable var app = app
@@ -78,8 +79,12 @@ struct ProjectSidebar: View {
                 // drawingGroup so the selected-row vibrancy can't darken it (see StatusDot).
                 StatusDot(color: st.tint, size: 9, drawingGroup: true)
                     .help("Server: \(st.label)")
+                    // Pops in when the server starts; Reduce Motion keeps it to a plain fade.
+                    .transition(.pop(reduceMotion: reduceMotion))
             }
         }
+        // Cross-fades the dot's colour (orange → green) and runs its enter/exit transition.
+        .animation(Motion.state(reduceMotion), value: app.session(for: project)?.state)
         .padding(.leading, 14)   // indent under the folder header (DisclosureGroup used to do this)
         .tag(project.id)
         .contextMenu {
@@ -89,27 +94,23 @@ struct ProjectSidebar: View {
 
     /// Projects grouped by the folder the user dropped (`groupRoot`), falling back to the immediate
     /// parent for projects added directly. So dropping a parent like `~/Dev/42` keeps every project
-    /// found inside it under one "42" group, regardless of how deep each one was nested. Groups are
-    /// ordered by first appearance and projects keep their existing order; the group id is the full
-    /// path (same-named folders elsewhere stay distinct), the display name its last path component.
-    private var groups: [(id: String, name: String, projects: [Project])] {
-        var order: [String] = []
-        var byGroup: [String: [Project]] = [:]
-        for p in app.projects {
-            let key = p.groupRoot ?? URL(fileURLWithPath: p.path).deletingLastPathComponent().path
-            if byGroup[key] == nil { order.append(key) }
-            byGroup[key, default: []].append(p)
-        }
-        return order.map { (id: $0, name: URL(fileURLWithPath: $0).lastPathComponent, projects: byGroup[$0]!) }
-    }
+    /// found inside it under one "42" group, regardless of how deep each one was nested. The group id
+    /// is the full path (same-named folders elsewhere stay distinct), the display name its last path
+    /// component. Defined on AppState so ⌘1…⌘9 number projects in exactly this order.
+    private var groups: [(id: String, name: String, projects: [Project])] { app.projectGroups }
 
     /// A folder group header row: a chevron + folder label that toggles the group's collapsed state.
     /// Not tagged, so `List(selection:)` never treats it as a selectable project.
     @ViewBuilder private func groupHeader(_ group: (id: String, name: String, projects: [Project])) -> some View {
         let isCollapsed = collapsed.contains(group.id)
         HStack(spacing: 6) {
-            Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+            // One chevron that ROTATES (the standard disclosure motion) instead of swapping two
+            // glyphs. The animation is scoped to the chevron alone: animating the rows' insertion in
+            // a List(selection:) re-triggers the macOS layout bug described above.
+            Image(systemName: "chevron.right")
                 .font(.caption2.weight(.semibold)).foregroundStyle(.secondary).frame(width: 10)
+                .rotationEffect(.degrees(isCollapsed ? 0 : 90))
+                .animation(Motion.spatial(reduceMotion), value: isCollapsed)
             Label(group.name, systemImage: "folder")
                 .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             Spacer(minLength: 0)

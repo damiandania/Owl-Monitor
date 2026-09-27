@@ -299,17 +299,31 @@ private struct AdviceList: View {
 
 private struct ProjectDiagnosisDetail: View {
     @Environment(AppState.self) private var app
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// nil = follow the sidebar selection (the picker shows/overrides it).
     @Binding var projectID: Project.ID?
 
     private var effectiveID: Project.ID? { projectID ?? app.selectedProjectID }
     private var project: Project? { app.projects.first { $0.id == effectiveID } }
 
+    /// Which screen is up. The cross-fade keys on this — not on the content — so text changing
+    /// WITHIN a screen (the idle prompt naming another project) swaps in place instead of fading.
+    private var screen: String {
+        if app.isDiagnosingProject { return "loading" }
+        return app.projectDiagnosis == nil ? "idle" : "report"
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             picker
             Divider()
-            content.frame(maxWidth: .infinity, maxHeight: .infinity)
+            ZStack {
+                content
+                    .id(screen)
+                    .transition(.rise(reduceMotion: reduceMotion))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .animation(Motion.region(reduceMotion), value: screen)
         }
     }
 
@@ -347,8 +361,28 @@ private struct ProjectDiagnosisDetail: View {
 /// a determinate progress bar; while Claude reasons it shows a spinner.
 private struct LiveScanDetail: View {
     @Environment(AppState.self) private var app
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Which of the four screens is up — the cross-fade's key. Keying on the screen (not the
+    /// content) keeps the observing view's per-second progress updating in place, not re-fading.
+    private var screen: String {
+        switch app.liveScan.phase {
+        case .observing: "observing"
+        case .analyzing: "analyzing"
+        case .idle: app.liveScanReport == nil ? "idle" : "result"
+        }
+    }
 
     var body: some View {
+        ZStack {
+            content
+                .id(screen)
+                .transition(.rise(reduceMotion: reduceMotion))
+        }
+        .animation(Motion.region(reduceMotion), value: screen)
+    }
+
+    @ViewBuilder private var content: some View {
         switch app.liveScan.phase {
         case .observing: observing
         case .analyzing: Loading("Analyzing with Claude…")
@@ -404,6 +438,7 @@ private struct LiveScanDetail: View {
 private struct ReportPane: View {
     let report: ClaudeRunner.Report
     @State private var copied = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
@@ -422,8 +457,10 @@ private struct ReportPane: View {
                 } label: {
                     Label(copied ? "Copied" : "Copy report",
                           systemImage: copied ? "checkmark" : "doc.on.doc")
+                        .contentTransition(.symbolEffect(.replace))
                 }
                 .buttonStyle(.bordered)
+                .animation(Motion.state(reduceMotion), value: copied)
                 Spacer()
             }
             .padding(.horizontal).padding(.top, 6)

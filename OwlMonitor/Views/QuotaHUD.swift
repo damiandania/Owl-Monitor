@@ -125,11 +125,12 @@ struct QuotaHUDView: View {
 }
 
 private enum NotchStatus: Equatable {
-    case online, launching, building, stopped, warning
+    case online, serving, launching, building, stopped, warning
 
     var color: Color {
         switch self {
         case .online: .green
+        case .serving: .previewMagenta   // production build being served — see RunStatus.serving
         case .launching: .orange
         case .building: .blue
         case .stopped: .red
@@ -142,6 +143,7 @@ private enum NotchStatus: Equatable {
     var title: String {
         switch self {
         case .online: "Online"
+        case .serving: "Serving"
         case .launching: "Starting"
         case .building: "Building"
         case .stopped: "Stopped or failed"
@@ -159,7 +161,8 @@ private struct NotchStatusItem: Identifiable {
 }
 
 /// Status icons on the left of the notch. Each project appears only once, using the most important
-/// current state: build (blue) > online (green) > launching (orange) > warning > stopped (red).
+/// current state: build (blue) > serving a production build (magenta) > online (green) >
+/// launching (orange) > warning > stopped (red).
 /// A project remains green when any
 /// one of its managed processes is alive, even if a separate preview/build was stopped earlier.
 private struct NotchStatusStrip: View {
@@ -243,10 +246,20 @@ private struct NotchStatusStrip: View {
             if case .running = session.state { return true }
             return false
         }
+        let isPreviewOnline: Bool = {
+            guard let preview = appState.previews[project.id] else { return false }
+            if case .running = preview.state { return true }
+            return false
+        }()
         let worker = appState.workers[project.id]
         let build = appState.builds[project.id]
 
         if build?.isRunning == true { return (.building, "Build in progress") }
+        // A live preview is serving the production BUILD, not dev sources — checked before the
+        // generic "online" so it reads magenta rather than the dev server's green. Dev and preview
+        // are mutually exclusive per project (see AppState.stopSiblings), so this never masks a
+        // running dev server.
+        if isPreviewOnline { return (.serving, "Serving the production build") }
         if isOnline || worker?.isRunning == true { return (.online, "Server is online") }
         if isLaunching { return (.launching, "Server is starting") }
         if hasWarning { return (.warning, "Server health needs attention") }
@@ -275,7 +288,10 @@ private struct NotchProjectStatusIcon: View {
                         .repeatForever(autoreverses: true), value: isPulsing)
             }
             Circle().fill(.black)
+            // Cross-fade the ring between states (e.g. orange → magenta when a preview comes up).
+            // A colour fade isn't motion, so it stays on under Reduce Motion.
             Circle().stroke(item.status.color, lineWidth: 1.75)
+                .animation(Motion.state(reduceMotion), value: item.status)
             ProjectIconView(project: item.project, size: 10)
                 .clipShape(Circle())
         }

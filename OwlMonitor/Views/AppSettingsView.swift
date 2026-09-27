@@ -404,6 +404,7 @@ private struct EnvSection: View {
 
 private struct ProjectSettings: View {
     @Environment(AppState.self) private var app
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let project: Project
     let onRemoved: () -> Void
 
@@ -474,6 +475,7 @@ private struct ProjectSettings: View {
         } manual: {
             TextField("3000", value: Binding(get: { live.port }, set: { app.setPort($0, for: project.id) }),
                       format: .number.grouping(.never))
+                .labelsHidden()
                 .textFieldStyle(.roundedBorder).frame(width: 74)
         }
     }
@@ -514,8 +516,17 @@ private struct ProjectSettings: View {
         HStack(spacing: 12) {
             Label(name, systemImage: icon)
             Spacer(minLength: 8)
-            if auto.wrappedValue { autoValue() } else { manual() }
+            // Layered, not inline: flipping the switch cross-fades the auto value into the manual
+            // control IN PLACE — side by side in the HStack they'd briefly shove each other sideways.
+            ZStack(alignment: .trailing) {
+                if auto.wrappedValue {
+                    autoValue().transition(.rise(reduceMotion: reduceMotion))
+                } else {
+                    manual().transition(.rise(reduceMotion: reduceMotion))
+                }
+            }
             Toggle("", isOn: auto).labelsHidden().toggleStyle(.switch)
         }
+        .animation(Motion.state(reduceMotion), value: auto.wrappedValue)
     }
 }

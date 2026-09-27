@@ -9,6 +9,7 @@ struct ActivityView: View {
     @State private var expanded = false
     /// The timeline-charts accordion, sibling to the process list. Ephemeral like `expanded`.
     @State private var chartsExpanded = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -55,8 +56,8 @@ struct ActivityView: View {
             }
         }
         .dmCard()
-        .animation(.spring(response: 0.38, dampingFraction: 0.88), value: expanded)
-        .animation(.spring(response: 0.38, dampingFraction: 0.88), value: chartsExpanded)
+        .animation(Motion.region(reduceMotion), value: expanded)
+        .animation(Motion.region(reduceMotion), value: chartsExpanded)
     }
 
     private var header: some View {
@@ -69,6 +70,8 @@ struct ActivityView: View {
                 }
                 .toggleStyle(.switch).controlSize(.mini)
                 .help("Show each process's CPU as a share of the whole machine instead of per-core")
+                // Only meaningful with the process list open — so it arrives and leaves with it.
+                .transition(.pop(reduceMotion: reduceMotion))
             }
         }
     }
@@ -194,6 +197,8 @@ private struct MeterTile: View {
     let icon: String
     let help: String
 
+    // Deliberately NOT animated — neither the digits nor the bar (see MeterBar).
+
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 5) {
@@ -217,6 +222,12 @@ private struct MeterTile: View {
 }
 
 /// A rounded capsule meter with a neutral track — replaces the thin gray `ProgressView`.
+///
+/// Deliberately NOT animated. The meters resample every ~2 s, so gliding the bars (and rolling the
+/// digits) meant the Activity card re-laid-out and re-rendered on the CPU, frame by frame, for a
+/// third of all wall time — measured at ~17 % of a core with no servers running, against 0.9 %
+/// without it. A monitor for RAM-constrained Macs must not itself be the load it's watching; a value
+/// that simply updates in place is the right trade for an always-on instrument.
 private struct MeterBar: View {
     let value: Double      // 0…1
     let color: Color

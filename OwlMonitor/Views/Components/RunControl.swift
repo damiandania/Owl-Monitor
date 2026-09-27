@@ -105,7 +105,7 @@ extension AppState {
         return RunControl(
             kind: kind, rank: rank, projectID: project.id, projectName: project.name,
             title: title, icon: icon, tabID: "\(prefix):\(project.id)",
-            status: sessionStatus(session, running: running),
+            status: sessionStatus(session, running: running, servingBuild: kind == "preview"),
             logLines: { session?.logLines ?? [] }, startedAt: session?.startedAt,
             buildETA: nil, isLive: session != nil,
             port: session?.effectivePort, packageManager: project.packageManager.rawValue,
@@ -114,13 +114,16 @@ extension AppState {
 
     // MARK: - Runner → RunStatus mappings (the one place each process type's UI status is defined)
 
-    private func sessionStatus(_ s: DevSession?, running: String) -> RunStatus {
+    /// `servingBuild` — the preview serves a production BUILD rather than dev sources, so its "up"
+    /// state gets its own status (magenta) instead of the dev server's green, and every surface that
+    /// reads `RunStatus.color` picks that up automatically.
+    private func sessionStatus(_ s: DevSession?, running: String, servingBuild: Bool) -> RunStatus {
         switch s?.state ?? .idle {
         case .idle:       return .idle
         case .launching:  return .starting("Launching…")
         case .recycling:  return .starting("Recycling…")
         case .degraded:   return .starting("Unresponsive")
-        case .running:    return .running(running)
+        case .running:    return servingBuild ? .serving(running) : .running(running)
         case .stopped:    return .stopped
         case .failed:     return .failed(terminalError(s?.logLines))
         }
