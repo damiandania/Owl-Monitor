@@ -99,12 +99,16 @@ func args(_ pid: pid_t) -> String {
     return dm_proc_args(pid, &b, 1024) > 0 ? String(cString: b) : ""
 }
 
-// macOS hides an Apple binary's environment: reported as -2, not as a plain "absent" -1.
+// macOS hides an Apple binary's environment — reported as -2, not as a plain "absent" -1. Only with
+// SIP on, though: CI runners (SIP off) expose it, and there a missing key is an ordinary -1. PATH,
+// which every process inherits, tells the two apart.
 orphanSession("/bin/sleep 41")
 usleep(300_000)
 let plainSleep = pids { args($0).contains("sleep 41") }.first ?? -1
-chk(plainSleep > 0 && dm_proc_env_value(plainSleep, key, &buf, Int32(buf.count)) == -2,
-    "env: a platform binary's hidden environment → -2")
+let envVisible = plainSleep > 0 && dm_proc_env_value(plainSleep, "PATH", &buf, Int32(buf.count)) > 0
+let sleepTag = plainSleep > 0 ? dm_proc_env_value(plainSleep, key, &buf, Int32(buf.count)) : 0
+chk(plainSleep > 0 && sleepTag == (envVisible ? -1 : -2),
+    "env: a platform binary's environment → \(envVisible ? "-1 (visible here: SIP off)" : "-2 (hidden)")", "got \(sleepTag)")
 
 let directID = UUID(), shellID = UUID()
 // (a) The root itself carries the tag — Owl Monitor crashed under a running node leader.
