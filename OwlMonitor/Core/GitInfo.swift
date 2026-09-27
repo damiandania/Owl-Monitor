@@ -120,6 +120,32 @@ enum GitInfo {
         URL(fileURLWithPath: a).standardizedFileURL.path == URL(fileURLWithPath: b).standardizedFileURL.path
     }
 
+    /// The git to drive, resolved ONCE to the first candidate that actually runs. `/usr/bin/git` is
+    /// the Xcode command-line shim, and it refuses to run AT ALL — exit 69, "You have not agreed to
+    /// the Xcode license agreements" — after every Xcode update until the licence is accepted. Hard-
+    /// coding it meant every git call here failed while a perfectly good Homebrew git sat next to it
+    /// (and the user's own terminal, whose PATH finds that one first, looked fine — so the app seemed
+    /// to be the broken part). The shim stays LAST so that when it's the only git installed its own
+    /// message is still what surfaces.
+    private static let gitPath: String = {
+        let candidates = ["/opt/homebrew/bin/git", "/usr/local/bin/git", "/usr/bin/git"]
+        return candidates.first(where: runs) ?? "/usr/bin/git"
+    }()
+
+    /// Whether `path` is an executable that answers `git --version` with status 0 — presence on disk
+    /// isn't enough, since the shim exists and is executable even while it refuses to do anything.
+    private static func runs(_ path: String) -> Bool {
+        guard FileManager.default.isExecutableFile(atPath: path) else { return false }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: path)
+        proc.arguments = ["--version"]
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        do { try proc.run() } catch { return false }
+        proc.waitUntilExit()
+        return proc.terminationStatus == 0
+    }
+
     private static func run(_ args: [String], cwd: String) -> String? {
         let r = runResult(args, cwd: cwd)
         return r.status == 0 ? r.stdout : nil
@@ -128,7 +154,7 @@ enum GitInfo {
     /// Run `git -C <cwd> <args>` and capture status/stdout/stderr. Outputs here are tiny (worktree
     /// listing/creation), so reading each pipe to EOF before `waitUntilExit` is safe.
     private static func runResult(_ args: [String], cwd: String) -> (status: Int32, stdout: String, stderr: String) {
-        let git = "/usr/bin/git"
+        let git = gitPath
         guard FileManager.default.isExecutableFile(atPath: git) else { return (127, "", "git not found at \(git)") }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: git)

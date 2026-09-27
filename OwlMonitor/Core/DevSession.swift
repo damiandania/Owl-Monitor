@@ -56,7 +56,15 @@ final class DevSession {
     private var strikes = 0
     private var hasBeenHealthy = false
     private var recycling = false
-    private var lastMemoryGB = 4
+    /// The heap (GB) the current/last launch actually got — which, with the shared-memory budget, can
+    /// be below the project's learned level. Read by the CLI's launch reply.
+    private(set) var lastMemoryGB = 4
+    /// When the server last printed anything: a request log, an HMR rebuild after a file save. One of
+    /// the activity signals behind idle auto-stop. Not observed — no view needs a redraw per chunk.
+    @ObservationIgnored private(set) var lastOutputAt = Date()
+    /// Recognises the server's log line for our own health probe, which must not count as output
+    /// activity (Astro logs every request) — see `MemoryGuard.probeEchoPattern`.
+    @ObservationIgnored private lazy var probeEcho = MemoryGuard.probeEchoPattern(path: project.effectiveHealthPath)
     private let probeInterval: Duration = .seconds(6)
     private let httpTimeout: TimeInterval = 8   // tolerant of a busy server under load
     private let warmHTTPTimeout: TimeInterval = 3   // snappier flip to .running during warm-up
@@ -97,7 +105,12 @@ final class DevSession {
 
     // MARK: - Launch / stop
 
-    func start(memoryGB: Int) {
+    /// `reservedPorts` — ports other supervised sessions (dev servers + previews) are currently using
+    /// or about to bind, so an unconfigured project doesn't have to guess-and-collide the way a
+    /// framework's own single-step port fallback does. Passed by `AppState` at launch time; internal
+    /// auto-restarts/recycles omit it and rely on the OS-level check in `firstFreePort` instead, since
+    /// by then any colliding sibling is either already bound (and so visible to that check) or gone.
+    func start(memoryGB: Int, reservedPorts: Set<Int> = []) {
         guard !state.isActive else { return }
         state = .launching
         stopping = false
@@ -124,24 +137,51 @@ final class DevSession {
         // Prepend env inline (the login shell applies it), and `exec` so the dev process
         // REPLACES the shell — making it the session leader we spawned, so the whole tree
         // is reliably enumerable (by session) and killable (by killpg).
-        // Pin the port: an explicit project.port wins; otherwise reuse the last port the server
-        // actually bound to, so a relaunch/recycle keeps the same port instead of drifting (3000→3001).
-        let pinnedPort = project.port ?? lastKnownPort
-        let portEnv = pinnedPort.map { "PORT=\($0) " } ?? ""
+        // Pin the port: an explicit project.port always wins, even if it collides — that's a
+        // deliberate override. Otherwise reuse the last port the server actually bound to, so a
+        // relaunch/recycle keeps the same port instead of drifting (3000→3001) — but only while it's
+        // still actually free; a sibling project (in `reservedPorts`) or some unrelated process (the
+        // OS-level check) may have since claimed it. Falling back to the framework's own bare `PORT`-
+        // less fallback is how two unconfigured projects both land on the same port in the first place
+        // (each only knows to dodge ITS OWN default, not what else Owl Monitor is running) — so an
+        // unconfigured project always gets a concrete, verified-free port instead.
+        let pinnedPort: Int
+        if let explicit = project.port {
+            pinnedPort = explicit
+        } else if let last = lastKnownPort, !reservedPorts.contains(last), !Self.isPortInUse(last) {
+            pinnedPort = last
+        } else {
+            pinnedPort = Self.firstFreePort(from: 3000, avoiding: reservedPorts)
+        }
+        let portEnv = "PORT=\(pinnedPort) "
+        // Record the choice NOW, not only once the server prints its URL. A sibling launched a moment
+        // later builds its `reservedPorts` from our `effectivePort`, which for a still-booting server
+        // was nil — so two projects launched together both claimed 3000, then coexisted on *:3000 and
+        // [::1]:3000 with each health probe hitting the other's server. ingest() overwrites this with
+        // the port actually bound if the framework ignores PORT and picks its own.
+        lastKnownPort = pinnedPort
         // Auto-cleanup: reap any leftover/orphan dev process for this project (e.g. from a
         // previously force-killed Owl Monitor, reparented to launchd) before launching — both
         // whatever is holding the port we'll bind and any stray tree of this project — otherwise
         // the fresh server collides and exits ("code 6").
-        reapLeftovers(pinnedPort: pinnedPort)
+        // …but never reap BY PORT when a sibling supervised session owns that port. That can only
+        // happen when an explicit `project.port` collides with another running project, and the
+        // port rule SIGKILLs any JS server on it — i.e. it would silently kill a DIFFERENT project's
+        // server to make room. Let this launch fail to bind instead, so the clash is visible. This
+        // project's own leftover trees are still reaped (by path).
+        reapLeftovers(pinnedPort: reservedPorts.contains(pinnedPort) ? nil : pinnedPort)
         let fwEnv = Self.frameworkEnv(for: project.framework)
         let userEnv = ProcessSupport.envAssignments(project.env)
-        let command = "\(userEnv)\(fwEnv)NODE_OPTIONS=\(ProcessSupport.nodeHeapFlag(memoryGB: memoryGB)) FORCE_COLOR=1 \(portEnv)exec \(baseCommand)"
-        append(line: "$ \(command)  (cwd: \(project.path))")
+        // Ownership tag first, so the whole tree carries it — see ProcessSupport.ownershipTag.
+        let tag = ProcessSupport.ownershipTag(projectID: project.id, kind: commandOverride == nil ? "dev" : "preview")
+        let launch = "\(tag)\(fwEnv)NODE_OPTIONS=\(ProcessSupport.nodeHeapFlag(memoryGB: memoryGB)) FORCE_COLOR=1 \(portEnv)exec \(baseCommand)"
+        let command = "\(userEnv)\(launch)"
+        append(line: ProcessSupport.displayCommand(env: project.env, rest: launch, cwd: project.path))
 
         guard let proc = SpawnedProcess.spawn(command: command, cwd: project.path, wantsStdin: true) else {
             lastError = "spawn failed — could not start the dev command"
             state = .failed("spawn failed")
-            AppLog.shared.event("DevSession: spawn failed for \(project.name) — cmd: \(command)")
+            AppLog.shared.event("DevSession: spawn failed for \(project.name) — cmd: \(launch)")
             return
         }
         pid = proc.pid
@@ -149,12 +189,16 @@ final class DevSession {
         process = proc
 
         let stream = proc.chunks   // captured by the consume task; does NOT retain `proc`
-        consumeTask = Task { @MainActor [weak self] in
+        consumeTask = Task { @MainActor [weak self, weak proc] in
             for await chunk in stream {
                 guard let self else { continue }
                 switch chunk {
                 case .data(let data): self.ingest(data)
-                case .eof: self.process?.cancelReader()
+                // THIS stream's process, never `self.process`: after a recycle or crash restart, the
+                // old stream's EOF can land once the NEW process is already current — and cancelling
+                // the new reader closed the relaunched server's pipe, killing it with SIGPIPE (exit
+                // 13) on its next write. A fixed pre-relaunch delay used to hide the race.
+                case .eof: proc?.cancelReader()
                 case .exit(let code): self.handleExit(code: code)
                 }
             }
@@ -175,6 +219,74 @@ final class DevSession {
 
         startSampling()
         startHealth()
+    }
+
+    /// Whether something is accepting TCP connections on `port` over loopback (IPv4 or IPv6) — i.e.
+    /// the port is taken. Asks the kernel directly: a listener on the wildcard or on localhost answers
+    /// a loopback connect, so this sees servers owned by ANY user and every port a process holds. (It
+    /// replaces a walk of every process's fd table, which ran on the main actor once per candidate
+    /// port, couldn't inspect other users' processes, and saw only one listening port per process.)
+    /// A socket merely in TIME_WAIT refuses the connect, so a just-stopped server's port reads free —
+    /// keeping a relaunch on its sticky port instead of drifting (3000→3001).
+    nonisolated static func isPortInUse(_ port: Int) -> Bool {
+        loopbackAccepts(port: port, ipv6: false) || loopbackAccepts(port: port, ipv6: true)
+    }
+
+    /// Non-blocking connect to 127.0.0.1 / ::1 on `port`, bounded by a short poll so a misbehaving
+    /// listener can never stall the caller. Loopback answers at once either way (refused or
+    /// accepted), so the 200 ms bound is a backstop, not a delay.
+    nonisolated private static func loopbackAccepts(port: Int, ipv6: Bool) -> Bool {
+        guard (1...65535).contains(port) else { return false }
+        let fd = socket(ipv6 ? AF_INET6 : AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var on: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK)
+
+        let rc: Int32
+        if ipv6 {
+            var addr = sockaddr_in6()
+            addr.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
+            addr.sin6_family = sa_family_t(AF_INET6)
+            addr.sin6_port = in_port_t(UInt16(port).bigEndian)
+            addr.sin6_addr = in6addr_loopback
+            rc = withUnsafePointer(to: &addr) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in6>.size))
+                }
+            }
+        } else {
+            var addr = sockaddr_in()
+            addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            addr.sin_family = sa_family_t(AF_INET)
+            addr.sin_port = in_port_t(UInt16(port).bigEndian)
+            addr.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+            rc = withUnsafePointer(to: &addr) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                }
+            }
+        }
+        if rc == 0 { return true }                          // connected at once
+        guard errno == EINPROGRESS else { return false }    // ECONNREFUSED — nothing listening
+        var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+        guard poll(&pfd, 1, 200) == 1 else { return false }
+        var err: Int32 = 0
+        var len = socklen_t(MemoryLayout<Int32>.size)
+        getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len)
+        return err == 0
+    }
+
+    /// First port at/after `start` that's neither claimed by a sibling supervised session
+    /// (`reservedPorts`) nor already accepting connections. Bounded so a pathological machine can't
+    /// spin here; past the bound the framework's own fallback takes over from `start`.
+    static func firstFreePort(from start: Int, avoiding reservedPorts: Set<Int>) -> Int {
+        for port in start..<min(start + 200, 65536)
+        where !reservedPorts.contains(port) && !isPortInUse(port) {
+            return port
+        }
+        return start
     }
 
     /// Reap leftover/orphan dev processes for this project before (re)launching: anything holding
@@ -248,6 +360,11 @@ final class DevSession {
         return false
     }
 
+    /// Clear the on-screen log (⌘K, like Terminal). Only the in-memory buffer: the on-disk log that
+    /// `owl-monitor logs` and History read is left intact, and a line still being assembled stays in
+    /// `lineBuffer`, so output arriving mid-line keeps flowing correctly.
+    func clearLog() { logLines.removeAll() }
+
     /// Send a line of input to the running dev server's stdin.
     func sendInput(_ text: String) {
         guard stdinFD >= 0 else { return }
@@ -280,12 +397,15 @@ final class DevSession {
 
     private func ingest(_ data: Data) {
         var fresh: [String] = []
+        var meaningful = false
         for line in lineBuffer.ingest(data) {
             let clean = line.strippedANSI
             if LogNoise.isShellNoise(clean) { continue }
             scanPort(clean)
             fresh.append(line)
+            if !meaningful, !clean.isEmpty, !MemoryGuard.isProbeEcho(clean, pattern: probeEcho) { meaningful = true }
         }
+        if meaningful { lastOutputAt = Date() }
         append(lines: fresh)
     }
 
@@ -345,7 +465,16 @@ final class DevSession {
         graceTask?.cancel()
         sampleTask?.cancel()
         sampleTask = nil
+        let exitedLeader = pid
         pid = 0
+        // The leader is gone, but its children may not be: a SIGKILL on the leader (a crash, the
+        // kernel's OOM killer) is never delivered to them, so they're reparented to launchd and keep
+        // running — holding the port and RAM. Only an auto-restart's reapLeftovers ever caught them;
+        // a give-up after the retry budget, or a Stop pressed after the crash (pid is 0 by then, so
+        // stop() had nothing to kill), left them orphaned for good. Sweep the dead leader's session
+        // right now — ProcessTree finds its members even with the leader dead. Harmless after a
+        // deliberate stop/recycle, whose tree-kill has already done the same.
+        if exitedLeader > 0 { ProcessSupport.gracefulKillTree(exitedLeader) }
         lastExitCode = code
         closeStdin()
         process?.release()
@@ -419,6 +548,8 @@ final class DevSession {
         state = .recycling
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(delaySeconds))
+            // Resolve the shell PATH off the main thread first, so start() finds it cached.
+            await ShellEnvironment.refresh()
             guard let self, !self.stopping else { return }
             self.state = .idle
             self.start(memoryGB: gb)
@@ -604,8 +735,23 @@ final class DevSession {
         recycling = false
         state = .idle  // clear "active" so start() proceeds
         let gb = lastMemoryGB
+        let port = project.port ?? lastKnownPort
         Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(400))
+            // Relaunch as soon as the old server has actually let go of its port, not after a fixed
+            // delay. The tree's leader (e.g. `pnpm`) exits first; its listening child (`node`) can
+            // hold the socket a beat longer — and start() treats a busy sticky port as taken, which
+            // would drift the server 3000→3001. Poll (a cheap loopback connect) for up to ~3 s, which
+            // also relaunches FASTER than the old flat 400 ms whenever the port frees sooner.
+            if let port {
+                var polls = 0
+                while polls < 30, Self.isPortInUse(port) {
+                    try? await Task.sleep(for: .milliseconds(100))
+                    polls += 1
+                }
+            } else {
+                try? await Task.sleep(for: .milliseconds(400))
+            }
+            await ShellEnvironment.refresh()   // off the main thread, so start() finds it cached
             self?.start(memoryGB: gb)
         }
     }

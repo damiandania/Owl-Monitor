@@ -4,6 +4,7 @@ import AppKit
 struct RootSplitView: View {
     @Environment(AppState.self) private var app
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         @Bindable var app = app
@@ -46,6 +47,12 @@ struct RootSplitView: View {
                 }
         }
         .navigationTitle("Owl Monitor")
+        // A launch is likely soon after either of these: warm the login-shell PATH in the background
+        // now, so pressing Start (or ⌘R) never freezes the window resolving it — see ShellEnvironment.
+        .onChange(of: app.selectedProjectID) { ShellEnvironment.prefetch() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            ShellEnvironment.prefetch()
+        }
     }
 
     /// Toolbar control for `AppState.sleepGuard`: clicking asks how long to keep the Mac from
@@ -127,26 +134,42 @@ struct RootSplitView: View {
     /// card, and — while something is running — the GLOBAL terminal as another card below, filling
     /// the remaining height. All sit on the window-tinted base.
     @ViewBuilder private var detailTop: some View {
+        let showsTerminal = !app.sessions.isEmpty || !app.builds.isEmpty || !app.workers.isEmpty
+            || !app.previews.isEmpty || app.systemUnderPressure
+            // `hasClaudeShells`, not `processes`: reading `processes` here re-evaluated this whole
+            // detail stack on every 2 s sampler tick; the derived flag changes only when a Claude
+            // shell actually appears or exits.
+            || app.systemSampler.hasClaudeShells
         VStack(spacing: 14) {
-            if let project = app.selectedProject {
-                DashboardView(project: project)
-            } else {
-                Label("No project selected — add one with + and pick it in the sidebar.",
-                      systemImage: "square.dashed")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .dmCard()
+            // A ZStack, not a bare `if` in the VStack: while switching projects the outgoing and
+            // incoming dashboards briefly coexist, and stacked vertically they'd shove the Activity
+            // card down for a frame. Layered, the new one simply fades up over the old.
+            ZStack(alignment: .top) {
+                if let project = app.selectedProject {
+                    // Keyed by project, so switching (sidebar or ⌘1…⌘9) swaps in a fresh card with the
+                    // house entrance — otherwise near-identical cards change in place and the switch
+                    // is easy to miss.
+                    DashboardView(project: project)
+                        .id(project.id)
+                        .transition(.rise(reduceMotion: reduceMotion))
+                } else {
+                    Label("No project selected — add one with + and pick it in the sidebar.",
+                          systemImage: "square.dashed")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .dmCard()
+                        .transition(.rise(reduceMotion: reduceMotion))
+                }
             }
+            .animation(Motion.state(reduceMotion), value: app.selectedProjectID)
             ActivityView()
-            if !app.sessions.isEmpty || !app.builds.isEmpty || !app.workers.isEmpty
-                || !app.previews.isEmpty || app.systemUnderPressure
-                // `hasClaudeShells`, not `processes`: reading `processes` here re-evaluated this
-                // whole detail stack on every 2 s sampler tick; the derived flag changes only when
-                // a Claude shell actually appears or exits.
-                || app.systemSampler.hasClaudeShells {
+            if showsTerminal {
+                // The terminal arrives with the first process and leaves with the last.
                 GlobalTerminalView()
+                    .transition(.rise(reduceMotion: reduceMotion))
             }
         }
+        .animation(Motion.region(reduceMotion), value: showsTerminal)
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color(nsColor: .windowBackgroundColor))

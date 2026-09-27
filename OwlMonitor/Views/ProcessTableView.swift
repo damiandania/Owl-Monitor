@@ -82,6 +82,7 @@ private struct ProcessRowView: View {
     let onKill: () -> Void
 
     @State private var hovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 0) {
@@ -93,7 +94,8 @@ private struct ProcessRowView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if killable, hovering {
-                    killButton.transition(.opacity)   // appears right after the name on hover
+                    killButton   // appears right after the name on hover
+                        .transition(.pop(reduceMotion: reduceMotion))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -109,7 +111,7 @@ private struct ProcessRowView: View {
         .background(rowBackground, in: RoundedRectangle(cornerRadius: 7))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .animation(.easeInOut(duration: 0.12), value: hovering)
+        .animation(Motion.feedback, value: hovering)
         .help(rowHelp)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)

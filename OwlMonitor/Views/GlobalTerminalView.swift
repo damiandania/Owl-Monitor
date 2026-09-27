@@ -7,6 +7,9 @@ import AppKit
 /// status dot / ✕ on hover".
 struct GlobalTerminalView: View {
     @Environment(AppState.self) private var app
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Shared by every tab's selection capsule so choosing another tab slides it there.
+    @Namespace private var tabSelection
 
     private enum Tab: Identifiable {
         case control(RunControl)
@@ -48,9 +51,16 @@ struct GlobalTerminalView: View {
         VStack(spacing: 10) {
             ScrollView(.horizontal) {
                 HStack(spacing: 8) {
-                    ForEach(tabs) { pill(for: $0, selected: $0.id == sel) }
+                    ForEach(tabs) {
+                        pill(for: $0, selected: $0.id == sel)
+                            .transition(.pop(reduceMotion: reduceMotion))
+                    }
                 }
                 .padding(.horizontal, 2).padding(.vertical, 1)
+                // Tabs pop in and out as servers start and stop; the selection capsule slides to the
+                // chosen tab (dropped under Reduce Motion, where it simply moves).
+                .animation(Motion.state(reduceMotion), value: tabs.map(\.id))
+                .animation(Motion.spatial(reduceMotion), value: sel)
             }
             .scrollIndicators(.hidden)
 
@@ -66,20 +76,20 @@ struct GlobalTerminalView: View {
         switch tab {
         case .control(let c):
             TabPill(icon: c.icon, name: c.projectName, help: "\(c.title) · \(c.projectName)",
-                    isPressure: false, selected: selected, tint: c.status.color,
+                    isPressure: false, selected: selected, namespace: tabSelection, tint: c.status.color,
                     onSelect: { app.selectedTerminalID = c.tabID },
                     closeHelp: "Close \(c.title.lowercased()) · \(c.projectName)", onClose: c.onClose)
         case .claude(let row):
             TabPill(icon: "terminal", assetIcon: "ClaudeLogo", name: row.name,
                     help: "\(row.name) — pid \(row.id)",
-                    isPressure: false, selected: selected, tint: .red,
+                    isPressure: false, selected: selected, namespace: tabSelection, tint: .red,
                     onSelect: { app.selectedTerminalID = "claude:\(row.id)" },
                     closeHelp: "Stop \(row.name) (pid \(row.id))",
                     onClose: { app.killProcessRow(row) })
         case .pressure:
             TabPill(icon: "exclamationmark.triangle.fill", name: "System pressure",
                     help: "System under pressure — suggested processes to free up",
-                    isPressure: true, selected: selected, tint: .yellow,
+                    isPressure: true, selected: selected, namespace: tabSelection, tint: .yellow,
                     onSelect: { app.selectedTerminalID = "pressure" },
                     closeHelp: "Dismiss pressure suggestions", onClose: { app.dismissPressure() })
         }
@@ -109,6 +119,7 @@ struct GlobalTerminalView: View {
         let help: String
         let isPressure: Bool
         let selected: Bool
+        let namespace: Namespace.ID
         let tint: Color
         let onSelect: () -> Void
         let closeHelp: String
@@ -131,9 +142,19 @@ struct GlobalTerminalView: View {
             }
             .foregroundStyle(foreground)
             .padding(.horizontal, 12).padding(.vertical, 6)
-            .background(background, in: Capsule())
+            .background {
+                if selected {
+                    // ONE selection capsule shared by every tab, so choosing another tab SLIDES it
+                    // there — showing where the selection went — instead of one capsule vanishing
+                    // and another appearing. Its fill cross-fades too (accent ↔ pressure yellow).
+                    Capsule().fill(background)
+                        .matchedGeometryEffect(id: "terminal-tab-selection", in: namespace)
+                } else {
+                    Capsule().fill(background)
+                }
+            }
             .onHover { hovering = $0 }
-            .animation(.easeInOut(duration: 0.12), value: hovering)
+            .animation(Motion.feedback, value: hovering)
         }
 
         @ViewBuilder private var iconView: some View {

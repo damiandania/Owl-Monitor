@@ -21,6 +21,7 @@ struct OwlMonitorApp: App {
         }
         .commands {
             CommandGroup(replacing: .newItem) {}
+            ServerCommands(app: appState)
         }
 
         // The menu-bar item (MenuBarExtra) is gone: macOS hides menu-bar icons behind the notch, so
@@ -45,6 +46,106 @@ struct OwlMonitorApp: App {
     }
 }
 
+/// The Server menu: every run action for the selected project, with keyboard shortcuts. The app had
+/// none before — every start, stop, build or open meant reaching for the mouse. Items act on the
+/// sidebar's selection and disable themselves when they can't apply.
+///
+/// Each action re-reads `app.selectedProject` WHEN IT RUNS rather than capturing the value the menu
+/// was built with: the titles and enabled states are best-effort, but a stale capture would make ⌘R
+/// restart a project that's no longer selected. Every action is also a safe no-op when it doesn't
+/// apply, so a menu that lags a state change can't do harm.
+struct ServerCommands: Commands {
+    let app: AppState
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        // ⌘, is THE macOS Settings shortcut, but Settings is a plain `Window` (for its native title
+        // bar) and only a `Settings` scene gets ⌘, for free — so it was never bound.
+        CommandGroup(replacing: .appSettings) {
+            Button("Settings…") { openWindow(id: "settings") }
+                .keyboardShortcut(",")
+        }
+
+        CommandMenu("Server") {
+            let project = app.selectedProject
+            let devUp = project.map { app.sessions[$0.id]?.state.isActive == true } ?? false
+            let live = project.flatMap { app.activeSession(for: $0) } != nil
+            let building = project.flatMap { app.builds[$0.id]?.isRunning } ?? false
+
+            Button(devUp ? "Restart" : "Start") {
+                guard let p = app.selectedProject else { return }
+                if let s = app.sessions[p.id], s.state.isActive { s.recycle() } else { app.launch(p) }
+            }
+            .keyboardShortcut("r")
+            .disabled(project == nil)
+
+            Button("Stop") {
+                guard let p = app.selectedProject else { return }
+                app.stop(p)
+                app.stopPreview(p)   // dev and preview are mutually exclusive — stop whichever runs
+            }
+            .keyboardShortcut(".")
+            .disabled(!live)
+
+            // Hand RAM back in one go: stop every server except the one you're working on.
+            let others = app.otherLiveServerCount(keeping: project)
+            Button {
+                app.stopOtherServers(keeping: app.selectedProject)
+            } label: {
+                // Separate keys (not one interpolated string) so each language gets a real sentence.
+                switch others {
+                case 0: Text("Stop Other Servers")
+                case 1: Text("Stop 1 Other Server")
+                default: Text("Stop \(others) Other Servers")
+                }
+            }
+            .keyboardShortcut(".", modifiers: [.command, .option])
+            .disabled(others == 0)
+
+            Divider()
+
+            Button("Build") { if let p = app.selectedProject { app.runBuild(p) } }
+                .keyboardShortcut("b")
+                .disabled(project?.buildCommand == nil || building)
+
+            Button("Preview Production Build") { if let p = app.selectedProject { app.startPreview(p) } }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+                .disabled(project?.previewCommand == nil)
+
+            Divider()
+
+            Button("Open in Browser") { if let p = app.selectedProject { app.openInBrowser(p) } }
+                .keyboardShortcut("o")
+                .disabled(!live)
+
+            Button("Copy URL") { if let p = app.selectedProject { app.copyServerURL(p) } }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+                .disabled(!live)
+
+            Button("Open in Editor") { if let p = app.selectedProject { app.openInEditor(p) } }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(project == nil)
+
+            Button("Reveal in Finder") { if let p = app.selectedProject { app.openInFinder(p) } }
+                .disabled(project == nil)
+
+            Divider()
+
+            Button("Clear Log") { app.clearSelectedTerminal() }
+                .keyboardShortcut("k")
+
+            Divider()
+
+            // ⌘1…⌘9 in sidebar order (AppState.projectGroups), so "3" is the third row you see.
+            let ordered = app.projectGroups.flatMap(\.projects)
+            ForEach(Array(ordered.prefix(9).enumerated()), id: \.element.id) { index, p in
+                Button(p.name) { app.selectedProjectID = p.id }
+                    .keyboardShortcut(KeyEquivalent(Character(String(index + 1))))
+            }
+        }
+    }
+}
+
 /// Hosts the always-visible quota HUD (a floating panel beside the notch). Kept in an AppDelegate
 /// because it's a plain AppKit window with no place in the SwiftUI scene graph, and it must come up
 /// once at launch and live for the whole app session.
@@ -58,7 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// build the controls menu. Guarded so a window reopen doesn't spawn a second HUD.
     func attach(appState: AppState) {
         guard quotaHUD == nil else { return }
-        // One continuous notch bar: animated mascot (left) + notch + quota readout (right).
+        // One continuous notch bar: project-status icons (left) + notch + quota readout (right).
         quotaHUD = QuotaHUDController(claudeQuota: claudeQuota, gptQuota: gptQuota, appState: appState)
     }
 }

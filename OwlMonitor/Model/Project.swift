@@ -98,6 +98,10 @@ struct Project: Identifiable, Codable, Hashable, Sendable {
     /// relaunch or reinstall instead of running blind until the session's first build finishes. `nil`
     /// until the first successful build.
     var lastBuildSeconds: TimeInterval?
+    /// The smallest dev-server heap (GB) this project has PROVEN it needs: set whenever the OOM
+    /// autoscaler escalates, so the shared-memory budget (`MemoryGuard.budgetedHeapGB`) never squeezes
+    /// it back below a level it already ran out of memory at. nil until the first out-of-memory.
+    var heapFloorGB: Int?
     /// User-defined environment variables injected (inline, `KEY='value'`) ahead of every supervised
     /// run — dev server, preview, build, and worker. Ordered so the editor list is stable. Empty by
     /// default; the app never sets these itself (it only manages PORT/NODE_OPTIONS/FORCE_COLOR).
@@ -132,6 +136,7 @@ struct Project: Identifiable, Codable, Hashable, Sendable {
         buildMemoryAuto: Bool = true,
         buildAutoHeapGB: Int = HeapScaling.firstGB,
         lastBuildSeconds: TimeInterval? = nil,
+        heapFloorGB: Int? = nil,
         env: [EnvVar] = []
     ) {
         self.id = id
@@ -154,6 +159,7 @@ struct Project: Identifiable, Codable, Hashable, Sendable {
         self.buildMemoryAuto = buildMemoryAuto
         self.buildAutoHeapGB = buildAutoHeapGB
         self.lastBuildSeconds = lastBuildSeconds
+        self.heapFloorGB = heapFloorGB
         self.env = env
     }
 
@@ -163,7 +169,7 @@ struct Project: Identifiable, Codable, Hashable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, name, path, groupRoot, packageManager, framework, devCommand, buildCommand, workerCommand, previewCommand
         case memoryGB, memoryAuto, port, healthPath, packageManagerAuto
-        case autoHeapGB, buildMemoryGB, buildMemoryAuto, buildAutoHeapGB, lastBuildSeconds, env
+        case autoHeapGB, buildMemoryGB, buildMemoryAuto, buildAutoHeapGB, lastBuildSeconds, heapFloorGB, env
     }
 
     init(from decoder: Decoder) throws {
@@ -191,6 +197,7 @@ struct Project: Identifiable, Codable, Hashable, Sendable {
         buildMemoryAuto = try c.decodeIfPresent(Bool.self, forKey: .buildMemoryAuto) ?? memoryAuto
         buildAutoHeapGB = try c.decodeIfPresent(Int.self, forKey: .buildAutoHeapGB) ?? HeapScaling.firstGB
         lastBuildSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .lastBuildSeconds)
+        heapFloorGB = try c.decodeIfPresent(Int.self, forKey: .heapFloorGB)
         env = try c.decodeIfPresent([EnvVar].self, forKey: .env) ?? []
     }
 }
@@ -213,6 +220,19 @@ extension Project {
     /// physical RAM when supplied, so the result is deterministic.
     func effectiveMemoryGB(systemGB: Int? = nil) -> Int {
         Project.clampHeap(memoryAuto ? autoHeapGB : memoryGB, systemGB: systemGB)
+    }
+
+    /// The lowest dev-server heap (GB) the shared-memory budget may hand this project: what it has
+    /// proven it needs (`heapFloorGB`), or — for a project whose learned level climbed before that was
+    /// recorded — the learned level itself. Otherwise just `minHeapGB`.
+    var devHeapFloorGB: Int {
+        max(Project.minHeapGB, heapFloorGB ?? (autoHeapGB > HeapScaling.firstGB ? autoHeapGB : Project.minHeapGB))
+    }
+
+    /// The same floor for a preview, which runs on the BUILD heap: a build level that has climbed is
+    /// proof the production bundle needs it.
+    var previewHeapFloorGB: Int {
+        max(Project.minHeapGB, buildAutoHeapGB > HeapScaling.firstGB ? buildAutoHeapGB : Project.minHeapGB)
     }
 
     /// Build heap (GB), INDEPENDENT from the dev server. In **auto** mode follows the build OOM

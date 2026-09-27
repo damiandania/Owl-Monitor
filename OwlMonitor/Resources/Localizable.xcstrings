@@ -32,6 +32,12 @@
     "Add Project" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Agregar proyecto" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Ajouter un projet" } } } },
+    "After %d h" : { "localizations" : {
+      "es" : { "stringUnit" : { "state" : "translated", "value" : "Tras %d h" } },
+      "fr" : { "stringUnit" : { "state" : "translated", "value" : "Après %d h" } } } },
+    "After %d min" : { "localizations" : {
+      "es" : { "stringUnit" : { "state" : "translated", "value" : "Tras %d min" } },
+      "fr" : { "stringUnit" : { "state" : "translated", "value" : "Après %d min" } } } },
     "AI analysis" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Análisis con IA" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Analyse par IA" } } } },
@@ -47,6 +53,9 @@
     "Browser (Open)" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Navegador (Abrir)" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Navigateur (Ouvrir)" } } } },
+    "Build" : { "localizations" : {
+      "es" : { "stringUnit" : { "state" : "translated", "value" : "Compilar" } },
+      "fr" : { "stringUnit" : { "state" : "translated", "value" : "Compiler" } } } },
     "Build failed" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Falló la compilación" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Échec du build" } } } },
@@ -65,6 +74,9 @@
     "Categories" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Categorías" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Catégories" } } } },
+    "Clear Log" : { "localizations" : {
+      "es" : { "stringUnit" : { "state" : "translated", "value" : "Limpiar registro" } },
+      "fr" : { "stringUnit" : { "state" : "translated", "value" : "Effacer le journal" } } } },
     "Click + to add a project folder. Configure it in Settings." : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Tocá + para agregar una carpeta de proyecto. Configurala en Ajustes." } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Cliquez sur + pour ajouter un dossier de projet. Configurez-le dans les Réglages." } } } },
@@ -77,6 +89,9 @@
     "Complete" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Completo" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Terminé" } } } },
+    "Copy URL" : { "localizations" : {
+      "es" : { "stringUnit" : { "state" : "translated", "value" : "Copiar URL" } },
+      "fr" : { "stringUnit" : { "state" : "translated", "value" : "Copier l’URL" } } } },
     "CPU" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "CPU" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "CPU" } } } },
@@ -137,6 +152,9 @@
     "Health path" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Ruta de salud" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Chemin de santé" } } } },
+    "Heaps in auto mode split the %d GB left after %d GB for macOS: 2 servers get %d GB each, 3 get %d GB. A project that ran out of memory keeps what it needs." : { "localizations" : {
+      "es" : { "stringUnit" : { "state" : "translated", "value" : "En modo automático, los heaps se reparten los %d GB que quedan tras reservar %d GB para macOS: 2 servidores reciben %d GB cada uno, 3 reciben %d GB. Un proyecto que ya se quedó sin memoria conserva lo que necesita." } },
+      "fr" : { "stringUnit" : { "state" : "translated", "value" : "En mode auto, les heaps se partagent les %d Go restants après %d Go réservés à macOS : 2 serveurs ont %d Go chacun, 3 en ont %d. Un projet déjà à court de mémoire garde ce qu’il lui faut." } } } },
     "Hide processes" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Ocultar procesos" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Masquer les processus" } } } },
@@ -146,6 +164,9 @@
     "Idle" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Inactivo" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Inactif" } } } },
+    "Idle means no browser tab connected and no output. Frees its memory; start it again any time." : { "localizations" : {
+      "es" : { "stringUnit" : { "state" : "translated", "value" : "Inactivo significa sin ninguna pestaña del navegador conectada y sin salida. Libera su memoria; puedes volver a iniciarlo cuando quieras." } },
+      "fr" : { "stringUnit" : { "state" : "translated", "value" : "Inactif signifie aucun onglet de navigateur connecté et aucune sortie. Libère sa mémoire ; relancez-le quand vous voulez." } } } },
     "Install hook" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Instalar hook" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Installer le hook" } } } },
@@ -179,6 +200,9 @@
     "Model" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Modelo" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Modèle" } } } },
+    "Never" : { "localizations" : {
+      "es" : { "stringUnit" : { "state" : "translated", "value" : "Nunca" } },
+      "fr" : { "stringUnit" : { "state" : "translated", "value" : "Jamais" } } } },
     "No history yet" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Aún no hay historial" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Pas encore d’historique" } } } },
@@ -206,7 +230,13 @@
     "Open in browser" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Abrir en el navegador" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Ouvrir dans le navigateur" } } } },
+    "Open in Browser" : { "localizations" : {
+      "es" : { "stringUnit" : { "state" : "translated", "value" : "Abrir en el navegador" } },
+      "fr" : { "stringUnit" : { "state" : "translated", "value" : "Ouvrir dans le navigateur" } } } },
     "Open in editor" : { "localizations" : {
+      "es" : { "stringUnit" : { "state" : "translated", "value" : "Abrir en el editor" } },
+      "fr" : { "stringUnit" : { "state" : "translated", "value" : "Ouvrir dans l’éditeur" } } } },
+    "Open in Editor" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Abrir en el editor" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Ouvrir dans l’éditeur" } } } },
     "Open System Settings" : { "localizations" : {
@@ -227,6 +257,9 @@
     "Port" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Puerto" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Port" } } } },
+    "Preview Production Build" : { "localizations" : {
+      "es" : { "stringUnit" : { "state" : "translated", "value" : "Previsualizar la compilación de producción" } },
+      "fr" : { "stringUnit" : { "state" : "translated", "value" : "Prévisualiser le build de production" } } } },
     "Project removed" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Proyecto eliminado" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Projet supprimé" } } } },
@@ -251,6 +284,12 @@
     "Remove project" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Eliminar proyecto" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Supprimer le projet" } } } },
+    "Restart" : { "localizations" : {
+      "es" : { "stringUnit" : { "state" : "translated", "value" : "Reiniciar" } },
+      "fr" : { "stringUnit" : { "state" : "translated", "value" : "Redémarrer" } } } },
+    "Reveal in Finder" : { "localizations" : {
+      "es" : { "stringUnit" : { "state" : "translated", "value" : "Mostrar en el Finder" } },
+      "fr" : { "stringUnit" : { "state" : "translated", "value" : "Afficher dans le Finder" } } } },
     "Route dev servers through the app" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Enrutar los servidores de desarrollo por la app" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Acheminer les serveurs de dev via l’app" } } } },
@@ -266,12 +305,36 @@
     "Settings" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Ajustes" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Réglages" } } } },
+    "Settings…" : { "localizations" : {
+      "es" : { "stringUnit" : { "state" : "translated", "value" : "Ajustes…" } },
+      "fr" : { "stringUnit" : { "state" : "translated", "value" : "Réglages…" } } } },
+    "Share RAM between servers" : { "localizations" : {
+      "es" : { "stringUnit" : { "state" : "translated", "value" : "Repartir la RAM entre servidores" } },
+      "fr" : { "stringUnit" : { "state" : "translated", "value" : "Partager la RAM entre les serveurs" } } } },
     "Show processes" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Mostrar procesos" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Afficher les processus" } } } },
+    "Start" : { "localizations" : {
+      "es" : { "stringUnit" : { "state" : "translated", "value" : "Iniciar" } },
+      "fr" : { "stringUnit" : { "state" : "translated", "value" : "Démarrer" } } } },
     "Starting" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Iniciando" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Démarrage" } } } },
+    "Stop" : { "localizations" : {
+      "es" : { "stringUnit" : { "state" : "translated", "value" : "Detener" } },
+      "fr" : { "stringUnit" : { "state" : "translated", "value" : "Arrêter" } } } },
+    "Stop %lld Other Servers" : { "localizations" : {
+      "es" : { "stringUnit" : { "state" : "translated", "value" : "Detener los otros %lld servidores" } },
+      "fr" : { "stringUnit" : { "state" : "translated", "value" : "Arrêter les %lld autres serveurs" } } } },
+    "Stop 1 Other Server" : { "localizations" : {
+      "es" : { "stringUnit" : { "state" : "translated", "value" : "Detener el otro servidor" } },
+      "fr" : { "stringUnit" : { "state" : "translated", "value" : "Arrêter l’autre serveur" } } } },
+    "Stop idle servers" : { "localizations" : {
+      "es" : { "stringUnit" : { "state" : "translated", "value" : "Detener servidores inactivos" } },
+      "fr" : { "stringUnit" : { "state" : "translated", "value" : "Arrêter les serveurs inactifs" } } } },
+    "Stop Other Servers" : { "localizations" : {
+      "es" : { "stringUnit" : { "state" : "translated", "value" : "Detener los demás servidores" } },
+      "fr" : { "stringUnit" : { "state" : "translated", "value" : "Arrêter les autres serveurs" } } } },
     "Stopped" : { "localizations" : {
       "es" : { "stringUnit" : { "state" : "translated", "value" : "Detenido" } },
       "fr" : { "stringUnit" : { "state" : "translated", "value" : "Arrêté" } } } },

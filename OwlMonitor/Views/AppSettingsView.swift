@@ -114,11 +114,27 @@ private struct GeneralSettings: View {
             }
             Section("Behavior") {
                 Toggle("Auto-close orphaned dev processes under pressure", isOn: autoClose)
+            }
+            Section {
                 Picker("Default heap for new projects", selection: defaultMem) {
                     ForEach(1...max(systemMaxGB, app.settings.defaultMemoryGB), id: \.self) {
                         Text("\($0) GB").tag($0)
                     }
                 }
+                Toggle(isOn: shareHeap) {
+                    Text("Share RAM between servers")
+                    Text(heapBudgetSummary)
+                }
+                Picker(selection: idleStop) {
+                    ForEach(AppSettings.idleStopChoices, id: \.self) { minutes in
+                        Text(idleStopLabel(minutes)).tag(minutes)
+                    }
+                } label: {
+                    Text("Stop idle servers")
+                    Text("Idle means no browser tab connected and no output. Frees its memory; start it again any time.")
+                }
+            } header: {
+                Text("Memory")
             }
         }
         .formStyle(.grouped)
@@ -153,6 +169,28 @@ private struct GeneralSettings: View {
     }
     private var autoClose: Binding<Bool> {
         .init(get: { app.settings.autoCloseOrphans }, set: { app.settings.autoCloseOrphans = $0; app.persistSettings() })
+    }
+    private var shareHeap: Binding<Bool> {
+        .init(get: { app.settings.shareHeapBudget }, set: { app.settings.shareHeapBudget = $0; app.persistSettings() })
+    }
+    private var idleStop: Binding<Int> {
+        .init(get: { app.settings.idleStopMinutes }, set: { app.settings.idleStopMinutes = $0; app.persistSettings() })
+    }
+    /// What the budget works out to on THIS Mac, so the toggle explains itself in real numbers.
+    private var heapBudgetSummary: String {
+        let ram = systemMaxGB
+        let reserve = MemoryGuard.reservedGB(systemGB: ram)
+        let two = MemoryGuard.budgetedHeapGB(learnedGB: 99, floorGB: Project.minHeapGB, systemGB: ram, otherServers: 1)
+        let three = MemoryGuard.budgetedHeapGB(learnedGB: 99, floorGB: Project.minHeapGB, systemGB: ram, otherServers: 2)
+        return String(format: String(localized: "Heaps in auto mode split the %d GB left after %d GB for macOS: 2 servers get %d GB each, 3 get %d GB. A project that ran out of memory keeps what it needs."),
+                      ram - reserve, reserve, two, three)
+    }
+    private func idleStopLabel(_ minutes: Int) -> String {
+        switch minutes {
+        case 0: return String(localized: "Never")
+        case let m where m % 60 == 0: return String(format: String(localized: "After %d h"), m / 60)
+        default: return String(format: String(localized: "After %d min"), minutes)
+        }
     }
     private var defaultMem: Binding<Int> {
         .init(get: { app.settings.defaultMemoryGB }, set: { app.settings.defaultMemoryGB = $0; app.persistSettings() })
@@ -404,6 +442,7 @@ private struct EnvSection: View {
 
 private struct ProjectSettings: View {
     @Environment(AppState.self) private var app
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let project: Project
     let onRemoved: () -> Void
 
@@ -474,6 +513,7 @@ private struct ProjectSettings: View {
         } manual: {
             TextField("3000", value: Binding(get: { live.port }, set: { app.setPort($0, for: project.id) }),
                       format: .number.grouping(.never))
+                .labelsHidden()
                 .textFieldStyle(.roundedBorder).frame(width: 74)
         }
     }
@@ -514,8 +554,17 @@ private struct ProjectSettings: View {
         HStack(spacing: 12) {
             Label(name, systemImage: icon)
             Spacer(minLength: 8)
-            if auto.wrappedValue { autoValue() } else { manual() }
+            // Layered, not inline: flipping the switch cross-fades the auto value into the manual
+            // control IN PLACE — side by side in the HStack they'd briefly shove each other sideways.
+            ZStack(alignment: .trailing) {
+                if auto.wrappedValue {
+                    autoValue().transition(.rise(reduceMotion: reduceMotion))
+                } else {
+                    manual().transition(.rise(reduceMotion: reduceMotion))
+                }
+            }
             Toggle("", isOn: auto).labelsHidden().toggleStyle(.switch)
         }
+        .animation(Motion.state(reduceMotion), value: auto.wrappedValue)
     }
 }

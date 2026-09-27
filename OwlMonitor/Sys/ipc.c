@@ -4,6 +4,7 @@
 #include <sys/un.h>
 #include <sys/ucred.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <string.h>
 #include <fcntl.h>
@@ -69,6 +70,17 @@ int dm_ipc_listen(const char *path) {
 int dm_ipc_accept(int listen_fd) {
     int fd = accept(listen_fd, NULL, NULL);
     dm_cloexec(fd);
+    if (fd >= 0) {
+        // The hub reads each request on its single accept thread, so a peer that connects and then
+        // stalls (never sends its newline) would otherwise wedge EVERY later CLI call. Bound the read
+        // so a stuck client times out as a bad request. The write bound covers the mirror case: a
+        // client that stops reading would block the reply write, which runs on the main actor —
+        // freezing the UI. Both are far above any real request/reply (a few hundred bytes, instant),
+        // and neither affects a long `build`: the hub reads once up front, then only writes.
+        struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    }
     return fd;
 }
 

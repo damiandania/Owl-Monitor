@@ -6,6 +6,7 @@ import AppKit
 /// system snapshot — without opening the main window.
 struct MenuBarView: View {
     @Environment(AppState.self) private var app
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Per-project expand override; absent → defaults to expanded when the project has something live.
     @State private var expandedOverride: [Project.ID: Bool] = [:]
 
@@ -83,9 +84,11 @@ struct MenuBarView: View {
                 .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
                 .padding(.leading, 18)
                 .padding(.top, 1)
+                // Unfolds down out of its header rather than blinking into place.
+                .transition(.rise(reduceMotion: reduceMotion))
             }
         }
-        .animation(.easeInOut(duration: 0.15), value: isOpen)
+        .animation(Motion.state(reduceMotion), value: isOpen)
     }
 
     /// Aggregate status across a project's controls: failed (red) ▸ starting (orange) ▸ running
@@ -192,6 +195,10 @@ private struct ControlRowView: View {
                 .font(.caption.weight(.medium)).foregroundStyle(control.status.color).lineLimit(1)
             if let started = control.startedAt, showsStop {
                 Text("· \(MenuBarView.uptime(since: started))").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
+            // Which port it's on, so a glance answers "where is it?" without opening the window.
+            if let port = control.port, showsStop {
+                Text(verbatim: "· :\(port)").font(.caption2.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 4)
             Button(action: control.onToggle) {

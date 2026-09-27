@@ -174,6 +174,7 @@ struct BranchWorktreeMenu: View {
 struct UncommittedDiffStat: View {
     let project: Project
     @State private var stat: GitInfo.DiffStat?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let poll = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
@@ -181,14 +182,23 @@ struct UncommittedDiffStat: View {
         Group {
             if let stat, !stat.isEmpty {
                 HStack(spacing: 6) {
-                    if stat.added > 0 { Text("+\(stat.added.formatted())").foregroundStyle(.green) }
-                    if stat.removed > 0 { Text("-\(stat.removed.formatted())").foregroundStyle(.red) }
+                    if stat.added > 0 {
+                        Text("+\(stat.added.formatted())").foregroundStyle(.green)
+                            .contentTransition(digits(stat.added))
+                    }
+                    if stat.removed > 0 {
+                        Text("-\(stat.removed.formatted())").foregroundStyle(.red)
+                            .contentTransition(digits(stat.removed))
+                    }
                 }
                 .font(.caption.weight(.semibold).monospacedDigit())
                 .help("Uncommitted vs HEAD: +\(stat.added) / -\(stat.removed) lines")
                 .fixedSize()
+                // Arrives when the tree goes dirty, leaves when you commit.
+                .transition(.pop(reduceMotion: reduceMotion))
             }
         }
+        .animation(Motion.state(reduceMotion), value: stat)
         .task(id: project.path) { await reload() }
         .onReceive(poll) { _ in Task { await reload() } }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -199,6 +209,12 @@ struct UncommittedDiffStat: View {
     private func reload() async {
         let path = project.path
         stat = await Task.detached { GitInfo.diffStat(for: path) }.value
+    }
+
+    /// Digits roll toward the new count (the direction reads at a glance: more or fewer changes);
+    /// under Reduce Motion they cross-fade instead of travelling.
+    private func digits(_ value: Int) -> ContentTransition {
+        reduceMotion ? .opacity : .numericText(value: Double(value))
     }
 }
 

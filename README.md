@@ -6,7 +6,7 @@
 
 **A native macOS app that launches, supervises, and auto-recycles your JS/TS dev servers — so a hung Nuxt process never pins a CPU core again.**
 
-Live resource graphs · hang detection · crash auto-revive · build runner · a hub every terminal routes through · Claude-powered diagnostics.
+Live resource graphs · hang detection · crash auto-revive · zero zombie servers · RAM shared fairly on 8 GB Macs · build runner · a hub every terminal routes through · Claude-powered diagnostics.
 
 [![macOS 26+](https://img.shields.io/badge/macOS-26%2B-000000?logo=apple&logoColor=white)](#requirements)
 [![Swift 6.3](https://img.shields.io/badge/Swift-6.3-F05138?logo=swift&logoColor=white)](#requirements)
@@ -25,7 +25,7 @@ Owl Monitor runs your dev servers the way a production process manager runs serv
 
 > **Why it exists.** A doubled `npm` wrapper once left an orphaned Nuxt process listening on `:3000` but unresponsive — pinning a CPU core and dragging the whole Mac down, with nothing obvious to kill. Owl Monitor does that supervision properly and *visibly*, so it can't happen quietly again.
 
-> **Built for small Macs.** Owl Monitor is tuned for machines where **RAM is the bottleneck** — an 8 GB Mac juggling a dev server, a production build, an editor and a browser. It actively manages that scarcity instead of leaving you to babysit Activity Monitor: heap that **autoscales** to what each project actually needs (and remembers it), dev servers **paused** to make room for a build, inactive memory **purged** before the kernel runs out of swap, and a **pressure system** that frees RAM *before* the machine grinds to a halt or the kernel starts SIGKILLing your build.
+> **Built for small Macs.** Owl Monitor is tuned for machines where **RAM is the bottleneck** — an 8 GB Mac juggling a dev server, a production build, an editor and a browser. It actively manages that scarcity instead of leaving you to babysit Activity Monitor: heap that **autoscales** to what each project actually needs (and remembers it), heaps **shared** so several servers together still fit in RAM, idle servers **stopped** automatically if you want, dev servers **paused** to make room for a build, **no zombie servers** left holding memory, and a **pressure system** that frees RAM *before* the machine grinds to a halt or the kernel starts SIGKILLing your build.
 
 <div align="center">
   <img src="docs/screenshots/dashboard.png" alt="Owl Monitor — a supervised dev server with live CPU / memory / swap meters and an integrated terminal" width="760" />
@@ -41,7 +41,8 @@ Owl Monitor runs your dev servers the way a production process manager runs serv
 - **Auto-detects** the package manager (npm · pnpm · yarn · bun · deno) and framework (Nuxt · Next · Astro · SvelteKit · Remix · SolidStart · Angular · Qwik · Vite · Express) per project — and launches **any** project that has a `dev` script regardless. Framework-specific env (e.g. `NUXT_IGNORE_LOCK` for Nuxt, `ASTRO_DEV_BACKGROUND=0` to keep Astro 7 in the foreground) is applied only where it belongs.
 - **Launches** the dev server with a deterministic heap size (`--max-old-space-size`), streaming its log live.
 - **Per-project settings** (gear on each sidebar row): **Memory / Port / Package**, each with an **Auto** toggle (on by default) — flip it off for a manual value via slider, field, or package picker.
-- **Per-project environment variables** — an editor of `KEY`/`value` rows, injected (shell-safe) into the dev server, preview, build, and worker on their next launch. The app's own `PORT` / `NODE_OPTIONS` win on a name clash.
+- **Per-project environment variables** — an editor of `KEY`/`value` rows, injected (shell-safe) into the dev server, preview, build, and worker on their next launch. The app's own `PORT` / `NODE_OPTIONS` win on a name clash. Keys must be valid variable names (anything else is dropped, never passed to the shell), and **values never reach a log**: the `$ …` launch line shown in the terminal, written to disk and read by `owl-monitor logs` prints them as `•••`.
+- **No port collisions** — a project without a fixed port gets a concrete free one, skipping ports its sibling projects hold or are about to bind (so two projects launched together can't both land on `:3000`), and keeps it across restarts while it's still free. "Free" is checked by asking the kernel over loopback — IPv4 *and* IPv6, so a Vite/Astro server bound only to `[::1]` counts.
 
 ### 📊 Live activity &amp; metrics
 - System **CPU / Memory / Swap** bars plus an Activity-Monitor-style table showing **only** the processes with real impact.
@@ -57,27 +58,50 @@ Owl Monitor runs your dev servers the way a production process manager runs serv
 - **OOM autoscaling** — in **auto** mode the heap starts at 4 GB and climbs **4 → 6 → 8** on each V8 out-of-memory, and the learned level is **remembered per project** so the next launch starts there instead of replaying the crashes. The dev server and the build keep **separate** learned levels. → [`docs/HEAP-AND-BUILD.md`](docs/HEAP-AND-BUILD.md)
 - **Crash-proof supervision** — a managed server (or even the notification subsystem) failing can never take the app down with it.
 
+### 🧟 No zombie servers
+A "zombie" is a server Owl Monitor started but no longer supervises — still holding its port and its RAM, invisible in the app. Both ways they appear were reproduced on a real machine, and both are closed:
+- **Every process Owl Monitor starts is tagged.** Launches carry `OWL_MONITOR_PROJECT=<project>:<kind>` in their environment, and every child inherits it — so ownership is *certain*, read from the process itself, never guessed from a command line. Anything untagged (a server you started yourself, your editor) is never touched.
+- **If Owl Monitor quits unexpectedly** (a crash, Force Quit), its servers keep running on their own. On the next launch it finds them, stops them, and **starts them again under supervision** — a notification says which ones were recovered. After that, the same sweep runs every 30 s as a safety net.
+- **If a server's main process dies first**, its children (bundler workers, esbuild, a Next.js render worker) used to be left behind. Now the whole tree is swept the moment the leader exits — dev server, preview, build and worker alike.
+- The tag is read through `KERN_PROCARGS2`, which needed two fixes to be reliable: Node's `process.title` zero-fills the argument block (hiding the environment of the `npm`/`next-server` leaders), and macOS hides the environment of Apple's own binaries entirely — so a tree whose root is `sh` or `make` is recognised through its **session** instead, which only our processes can be in.
+
 ### 🧯 Pressure response
 Reclaims memory **before** the machine stalls — both when it's detected as *stuck* (CPU pinned, or memory full and swapping, for a sustained window) **and proactively around every build**:
-- **Inactive memory is purged.** The system memory cache is released (`purge`) before a build and again mid-build under pressure — often a 1–2 GB swing — so a heavy build doesn't push the machine into swap exhaustion and a kernel SIGKILL (jetsam).
+- **Heaps share the RAM.** `--max-old-space-size` is a ceiling, not a reservation — but V8 grows a heap lazily all the way up to it before collecting hard, so three servers at the usual 4 GB add up to 12 GB of ceilings on an 8 GB Mac and macOS swaps long before any of them feels pressure. With **Share RAM between servers** (Settings → General → Memory, on by default), each launch in auto mode gets an even share of what's left after 3 GB for macOS: alone it keeps its 4 GB, two servers get **3 GB** each, three get **2 GB**. It only ever lowers a heap, never below 2 GB, and never below a level the project already ran out of memory at — an OOM escalation records that as its floor. The CLI's `up` reply says when a heap was trimmed and why.
+- **Idle servers stop themselves (optional).** **Stop idle servers** (Never · 15 min · 30 min · 1 h · 2 h) stops a dev server or preview nobody is using: no browser tab connected — its page load or HMR websocket shows up as a connection the server *accepted*, while its own outbound ones (a database, an API) don't count — and no output (a request, a rebuild after you save a file). A notification says how much it freed, with a **Restart** button.
+- **One click hands RAM back.** **Server → Stop N Other Servers** (⌥⌘.) stops everything except the project you're on and reports roughly how much it freed.
 - **Orphaned dev processes auto-close.** A dev server detected by its real binary in argv (`…/.bin/nuxt`, `vite/bin/vite`, `next dev`, …) that isn't in the managed tree is killed (SIGTERM → SIGKILL) and a **notification** lists what was closed. The managed server, editor, and system are excluded.
 - **Everything else stays a suggestion.** A sidebar panel surfaces other heavy processes — a fast **Haiku** evaluation of what's worth killing — each with a red **skull** button you press yourself. Critical processes (editor, WindowServer, Finder, daemons, Owl Monitor itself) are never suggested or auto-closed.
-- **Warns before you dig the hole.** Starting a server whose heap won't fit in free RAM — or when swap is already high — posts a **low-memory warning** (it never blocks the launch, just tells you), and a distinct **high-swap** alert fires once when swap climbs past ~60% so you can close idle projects before the Mac starts to stutter.
+- **Warns before you dig the hole.** Starting a server whose heap won't fit in free RAM — or when swap is already high — posts a **low-memory warning** (it never blocks the launch, just tells you). When other servers are running, the banner has a **Stop Other Servers** button that makes the room right there. A distinct **high-swap** alert fires once when swap climbs past ~60% so you can close idle projects before the Mac starts to stutter.
 
 ### 🔨 Build runner — tuned for tight RAM
 - Runs the project's build as a **separate tracked tree** with its own Activity row and terminal tab; the **Build** button becomes a red **Stop build** while running. The CLI's `build` is **synchronous** — it waits for the build and reports the exit code plus a ✅/❌ verdict (so an agent or a script gets the real result).
 - **The whole build error is never lost.** Each build's complete output is mirrored to its own log file, so `owl-monitor build`'s printed tail (and a big tool dump like a Rollup `watchFiles` object that can bury the real message) never hides it: on failure the CLI prints `↳ full build log: <path>`, and `owl-monitor logs --build` prints the entire thing.
 - **Pauses all active dev servers** while building (relaunching them after): on an 8 GB Mac a build running alongside a multi-GB dev server gets SIGKILLed by the kernel before it can finish.
 - **Autoscales the build heap** 4 → 6 → 8 on OOM, with its **own** learned level independent from the dev server's.
-- **Frees RAM aggressively around the build**: `purge`s inactive/cached memory (before, and again under pressure during), surfaces the resource advisor to close heavy non-essential apps, watches memory pressure to act **before** the kernel jetsams the build, and runs Node with `--optimize-for-size`. → [`docs/HEAP-AND-BUILD.md`](docs/HEAP-AND-BUILD.md)
+- **Frees RAM around the build**: surfaces the resource advisor to close heavy non-essential apps and watches memory pressure to act **before** the kernel jetsams the build. Workers and services a build leaves behind (esbuild, Turbopack, a Next.js build worker) are swept when it ends, so the dev server relaunched next gets that RAM back. → [`docs/HEAP-AND-BUILD.md`](docs/HEAP-AND-BUILD.md)
 
 ### 🖥️ Global terminal &amp; notch bar
 - **Global terminal** — one resizable panel at the bottom of the detail pane with **one tab per running server and per build, across all projects** (*icon + project name + ✕*). **Claude Code's shells and monitors get tabs too** — each tab shows the command/script it runs and a **Stop** button. Each log pane supports **native click-drag selection across many lines** and a one-click **Copy** button (with a copied ✓ confirmation) that puts the whole log on the clipboard; a search field filters it live.
 - **Global Activity** — the meters and process list always reflect the whole machine, not just the selected project.
-- **Notch bar** — a single black strip that extends the notch's bezel: an animated, all-vector Claude **cat mascot** on the left that mirrors what the machine is doing (hammering while a build runs, a rocket on the pad while a server boots, red-X eyes on a failure, a warning face under pressure, a hard-hat salute when a worker starts, cat vignettes when idle), and the live **Claude quota** — 5-hour and 7-day usage — on the right. Hovering it opens the controls menu: every **online server** (status/uptime + Stop/Restart), every **build** in progress, any **external** servers, a Launch button and a CPU/memory snapshot — without opening the window. (macOS hides menu-bar icons *behind* the notch, so the status glyph moved here where it's always visible, even in fullscreen.)
-- **Appearance** — app-wide **Theme** (System / Light / Dark) and a separate **Terminal** theme for the log panes.
+- **Notch bar** — a single black strip that extends the notch's bezel: each active project appears on the left as its favicon (or framework icon) inside a status ring — **green** online, **magenta** serving a production preview, **orange** pulsing while starting, **blue** pulsing during a build, **red** stopped/failed, **yellow** when degraded — plus a pressure warning when the machine needs attention. The live **Claude quota** — 5-hour and 7-day usage — stays on the right. Hovering it opens the controls menu: every **online server** (status · uptime · **port**, e.g. *Dev Running · 1m 24s · :3000*, with Stop/Restart), every **build** in progress, any **external** servers, a Launch button and a CPU/memory snapshot — without opening the window. (macOS hides menu-bar icons *behind* the notch, so the status glyph moved here where it's always visible, even in fullscreen.)
+- **Appearance** — app-wide **Theme** (System / Light / Dark) and a separate **Terminal** theme for the log panes. A running **preview** is magenta everywhere (run button, notch, sidebar), so it's never mistaken for the dev server.
+- **Motion that explains, not decorates** — one small motion system (three durations, one curve) animates *events*: a server starting pops its button, a crash shakes it, the terminal's tab indicator slides, panels rise in. Live values (meters, CPU %, uptime) deliberately don't animate — that alone once cost ~17 % of a core. Everything collapses to a plain fade under **Reduce Motion**.
 
-### ⌨️ CLI + central hub
+### ⌨️ Server menu &amp; shortcuts
+Everything acts on the project selected in the sidebar:
+
+| Shortcut | Action | Shortcut | Action |
+|---|---|---|---|
+| ⌘R | Start / Restart | ⌘O | Open in Browser |
+| ⌘. | Stop | ⇧⌘C | Copy URL |
+| ⌥⌘. | Stop N Other Servers | ⇧⌘E | Open in Editor |
+| ⌘B | Build | ⌘K | Clear Log |
+| ⇧⌘P | Preview Production Build | ⌘1 – ⌘9 | Jump to a project (sidebar order) |
+
+Plus **Reveal in Finder**, and ⌘, for Settings.
+
+### 🔌 CLI + central hub
 - Drive everything from any terminal: `owl-monitor up` (idempotent) · `build` (**synchronous**; pauses servers + frees RAM) · `status [--json]` · `stop` · `restart` · `logs -f` · `logs --build` (the full error of the last build). **One supervised server per project**, several concurrently; the CLI **auto-starts the app** if the hub isn't running. Install it in one click from **Settings → Claude Code → Install CLI** (it's bundled in the app). → [CLI reference](#command-line-interface)
 
 ### 🤖 Claude integration
@@ -93,9 +117,8 @@ Reclaims memory **before** the machine stalls — both when it's detected as *st
 ## Quick start
 
 ```bash
-# 1. Generate the Xcode project and build the app
+# 1. Generate the Xcode project (from the repo root, where project.yml lives) and build the app
 brew install xcodegen
-cd OwlMonitor
 xcodegen generate
 xcodebuild -project OwlMonitor.xcodeproj -scheme OwlMonitor -configuration Debug \
   -derivedDataPath build build
@@ -194,17 +217,19 @@ OwlMonitor/
   Model/      Project, AppSettings, SessionState, MetricPoint, IPCProtocol
   Store/      ProjectStore (Application Support JSON)
   Core/       Detector, DevSession (supervisor + metrics + health), ProcessTree,
+              OrphanReaper (zombie servers), MemoryGuard (heap budget, idle, warnings),
               SystemSampler (+ pressure detection), BuildRunner, IPCServer,
               Notifier, ClaudeRunner, ResourceAdvisor, LegacyMigration
   Sys/        spawn.c (posix_spawn SETSID + CLOEXEC), metrics.c (libproc/mach),
               ipc.c, dm_exc.m (ObjC exception shim) + bridging header
   Views/      RootSplitView, DashboardView, GlobalTerminalView, MenuBarView,
-              QuotaHUD + ClaudeMascot (the notch bar), ActivityView,
+              QuotaHUD (the notch bar), ActivityView, Components/Motion (the motion system),
               ProcessTableView, BrandMark, settings + Claude sheets
   Resources/  Assets.xcassets (AppIcon + OwlLogo + skull + github), Info.plist
 owl-monitor/  CLI target (IPC client, robust arg parsing in ArgParse.swift)
-brand/        The artwork: app-icon.png (the icon), favicon.svg (the in-app OwlLogo badge),
-              Logo-light/dark.png (the flat mark, for docs)
+brand/        The artwork: app-icon.png (the icon), mini-logo-light/dark.svg (the in-app
+              OwlLogo, one per appearance), Logo-light/dark.png (the full mark, for docs),
+              favicon.svg (the square badge)
 ```
 
 Every brand asset is designed artwork exported into `brand/`, and the app reads it from there — nothing
@@ -214,8 +239,9 @@ is drawn in code. After re-exporting `brand/app-icon.png`, refresh every size in
 swift tools/make-icon.swift
 ```
 
-`brand/favicon.svg` is the badge shown in the sidebar and Settings; the asset catalog keeps it as a
-vector, so it stays sharp at any size.
+`brand/mini-logo-light.svg` and `-dark.svg` are the mark shown in the sidebar and Settings. The asset
+catalog holds both under `OwlLogo` and picks one per system appearance, keeping them as vectors so they
+stay sharp at any size.
 
 ---
 
@@ -231,7 +257,9 @@ A few non-obvious things this codebase gets right — each found and pinned down
 - **Astro 7 is forced to the foreground** — from v7, `astro dev` *auto-daemonizes* (detaches to the background, parent exits 0) when it detects an AI coding agent. A supervisor that expects a long-lived foreground process would read that instant exit as a crash and relaunch in a loop, so Astro servers spawn with `ASTRO_DEV_BACKGROUND=0` — Owl Monitor *is* the background supervisor.
 - **External dev servers are identified, not just listed** — argv that *looks like* a dev server is labelled *project :port* (project from the path before `/node_modules/`, port from a `proc_pidfdinfo` scan for the LISTENing socket), flagged external, and shown but never supervised.
 - **Notifications can't crash the app** — `UNUserNotificationCenter` can raise an Objective-C `NSException` (which Swift can't `try`/`catch`) on a bundle the daemon rejects, so every notification call is routed through a tiny ObjC `@try/@catch` shim (`dm_try`).
-- **Deterministic heap sizing** — in auto mode it follows the framework default (Nuxt/Next 8 · Astro/Vite 4 · Node 2), never a stale stored value; floored at 2 GB, capped at physical RAM.
+- **Deterministic heap sizing** — in auto mode the heap is the project's learned level (4 GB to start, climbing on OOM), trimmed by the shared-RAM budget when other servers run; never a stale stored value, floored at 2 GB, capped at physical RAM.
+- **A stale EOF can't kill a relaunched server** — each output stream only ever cancels the reader of *its own* process. Before, the old process's end-of-file could land after a fast relaunch and close the *new* server's pipe, killing it with SIGPIPE (exit 13); a fixed pre-relaunch delay had been hiding the race.
+- **The hub can't be wedged** — each accepted socket gets 5 s read/write timeouts and a request line is capped at 64 KB, so a client that connects and stalls can't block every later CLI call (or the main actor, on the reply).
 
 ---
 
@@ -240,7 +268,7 @@ A few non-obvious things this codebase gets right — each found and pinned down
 `bash tests/run-tests.sh` is the one command that verifies the whole project, in two phases (add `--unit` to skip the slower Phase 1):
 
 - **Phase 1 — full compile.** Regenerates the project and builds *both* targets (app + CLI), catching SwiftUI/view errors the standalone suites can't.
-- **Phase 2 — headless unit suites.** Each compiles the real source files standalone with `swiftc` (no Xcode host, no GUI): **spawn** · **metrics** · **detector** · **model** · **sampler** · **session** · **argparse** · **advisor**.
+- **Phase 2 — headless unit suites.** Each compiles the real source files standalone with `swiftc` (no Xcode host, no GUI): **spawn** · **metrics** · **detector** · **model** · **notifications** · **sampler** · **session** · **advisor** · **sleepguard** · **charts** · **memguard** · **argparse** · **git** · **hook** · **migration** · **procsupport** · **orphans** · **ipc**. They run against real processes and sockets — e.g. `orphans` builds zombie trees the way production leaves them (own session, dead leader, an Apple-binary root) and checks the reaper finds and kills exactly those, and nothing else.
 
 When adding a feature, prefer extracting its decision logic into a pure (ideally `nonisolated static`) function so it's unit-testable here, then add or extend a suite. The Claude integrations reuse the same read-only `ClaudeRunner.run` path and were additionally verified live against the logged-in `claude` CLI.
 

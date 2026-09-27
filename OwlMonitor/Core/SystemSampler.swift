@@ -105,16 +105,24 @@ final class SystemSampler {
         }
     }
 
+    /// Thermal sensors are read on every `temperatureEvery`-th tick (~10 s), not every 2 s: the read
+    /// goes to the hardware sensor service and was one of the costliest calls in a sampling pass,
+    /// while the temperature itself only moves over tens of seconds.
+    private static let temperatureEvery = 5
+    private var temperatureTick = 0
+
     /// One tick: snapshot the supervised-leader info and caches on the main actor, run the heavy
     /// syscall sweep in `collect` OFF the main actor, then publish the results. The UI never blocks
     /// on the per-process rusage/name/argv syscalls, however loaded the machine is.
     private func sample() async {
+        temperatureTick += 1
         let input = SampleInput(
             devs: devServerInfo?() ?? [], build: buildInfo?(), workers: workerInfo?() ?? [],
             prev: prev, nameCache: nameCache, richNameCache: richNameCache,
             isSystemCache: isSystemCache,
             portRecheckAt: portRecheckAt, prevSysTicks: prevSysTicks,
-            coreCount: coreCount, totalMem: totalMem, topN: topN)
+            coreCount: coreCount, totalMem: totalMem, topN: topN,
+            readTemperature: temperatureTick % Self.temperatureEvery == 1)
         let out = await Task.detached(priority: .utility) { Self.collect(input) }.value
 
         prevSysTicks = out.sysTicks
@@ -129,7 +137,10 @@ final class SystemSampler {
             if swap.total != systemSwapTotal { systemSwapTotal = swap.total }
         }
         if Int(out.loadAvg * 100) != Int(loadAverage * 100) { loadAverage = out.loadAvg }
-        if Int(out.temperature.rounded()) != Int(cpuTemperature.rounded()) { cpuTemperature = out.temperature }
+        // NaN = not read this tick (see `temperatureEvery`) — keep the last reading.
+        if !out.temperature.isNaN, Int(out.temperature.rounded()) != Int(cpuTemperature.rounded()) {
+            cpuTemperature = out.temperature
+        }
         processes = out.processes
         let shells = out.processes.filter(\.isClaude)
         if shells.count != claudeShells.count
@@ -150,7 +161,9 @@ final class SystemSampler {
                 id: historyTick, date: Date(), systemCPU: cpu,
                 memUsed: out.memUsed, memTotal: totalMem,
                 swapUsed: systemSwapUsed, swapTotal: systemSwapTotal,
-                loadAverage: out.loadAvg, temperature: out.temperature)
+                // On ticks that skip the sensor (NaN), carry the last reading — a NaN point would
+                // break the timeline chart.
+                loadAverage: out.loadAvg, temperature: out.temperature.isNaN ? cpuTemperature : out.temperature)
             MetricChartMath.appendCapped(&history, point, cap: maxHistory)
             historyTick += 1
         }
@@ -172,6 +185,8 @@ final class SystemSampler {
         var coreCount: Int
         var totalMem: Double
         var topN: Int
+        /// Read the thermal sensors this tick? Only every `temperatureEvery` ticks — see there.
+        var readTemperature: Bool
     }
 
     private struct SampleOutput: Sendable {
@@ -321,7 +336,8 @@ final class SystemSampler {
         isSystem = isSystem.filter { scanned.contains($0.key) }
 
         return SampleOutput(systemCPU: systemCPU, sysTicks: ticks, memUsed: Double(sysMem.used),
-                            swap: swap, loadAvg: dm_load_avg(), temperature: dm_cpu_temperature(),
+                            swap: swap, loadAvg: dm_load_avg(),
+                            temperature: s.readTemperature ? dm_cpu_temperature() : .nan,
                             processes: result, prev: newPrev, nameCache: seenNames,
                             richNameCache: rich, isSystemCache: isSystem, portRecheckAt: recheckAt)
     }

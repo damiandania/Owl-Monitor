@@ -130,12 +130,19 @@ final class AppState {
         // swap: warn once when it climbs past the high-swap threshold (distinct from the stuck-machine
         // pressure alert), recommending the user close idle projects before it starts thrashing.
         Task { @MainActor [weak self] in
+            // Launch: clean up — and bring back — any servers a previous, unexpectedly-ended session
+            // left running unsupervised. Then the same sweep runs on every tick as a safety net.
+            // (PATH is warmed first, off the main thread, so those relaunches don't block on it.)
+            ShellEnvironment.prefetch()
+            self?.sweepOrphans(recover: true)
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(30))
                 guard let self else { return }
                 self.pressure.tick()
                 self.checkSwapPressure()
                 self.checkExternalProcesses()
+                self.sweepOrphans(recover: false)
+                self.checkIdleServers()
             }
         }
         // Wire notifications: set the UN delegate (foreground presentation + action routing),
@@ -270,15 +277,6 @@ final class AppState {
     /// The build heap (GB) for `project` (independent from the dev server), capped at physical RAM.
     func effectiveBuildMemoryGB(for project: Project) -> Int { project.effectiveBuildMemoryGB(systemGB: systemRAMGB) }
 
-    /// Free inactive/cached system memory (macOS `purge`). Best-effort, off the main thread — this
-    /// app exists for RAM-constrained Macs, so we squeeze every page before/under a heavy build.
-    nonisolated static func purgeSystemMemory() {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/sbin/purge")
-        try? p.run()
-        p.waitUntilExit()
-    }
-
     // Project CRUD + per-project settings live in AppState+Projects.swift (addProject, removeProject,
     // setMemoryGB/…, setPackageManager, …), all funneled through a single `mutate(_:_:)` helper.
 
@@ -293,25 +291,43 @@ final class AppState {
             self?.route(NotificationPolicy.make(from: event, projectID: project.id))
         }
         // Persist the heap level the OOM autoscaler learns (AUTO mode), so the next launch starts
-        // there instead of replaying 4→6→8.
-        session.onHeapEscalated = { [weak self] gb in self?.setAutoHeapGB(gb, for: project.id) }
+        // there instead of replaying 4→6→8 — and as the floor the shared-memory budget respects.
+        session.onHeapEscalated = { [weak self] gb in self?.recordHeapEscalation(gb, for: project.id) }
         sessions[project.id] = session
-        let heapGB = effectiveMemoryGB(for: project)
-        session.start(memoryGB: heapGB)
+        let heapGB = launchHeapGB(for: project, preview: false)
+        session.start(memoryGB: heapGB, reservedPorts: reservedPorts(excluding: project.id))
         warnLowMemory(heapGB: heapGB, name: project.name, projectID: project.id)
+    }
+
+    /// Ports every OTHER active supervised session (dev server or preview) is currently using or
+    /// about to bind — so a project with no explicit port override doesn't have to guess and collide
+    /// with a sibling the way each project's own framework fallback does in isolation. See
+    /// `DevSession.start(memoryGB:reservedPorts:)`.
+    private func reservedPorts(excluding projectID: Project.ID) -> Set<Int> {
+        let active = Array(sessions.values) + Array(previews.values)
+        return Set(active.filter { $0.project.id != projectID && $0.state.isActive }
+                          .compactMap(\.effectivePort))
     }
 
     /// Warn — never block (per the user's chosen behaviour) — when starting a process that will
     /// claim `heapGB` risks heavy swapping on this RAM-constrained Mac. Posts a passive `.pressure`
     /// notification (feed + history + a silent banner if that category is on); the server still
     /// starts. No-op when there's enough headroom. See `MemoryGuard.launchWarning`.
+    ///
+    /// When other servers are running, the banner carries a "Stop Other Servers" button — the one
+    /// action that actually makes room — which keeps this project and stops the rest.
     private func warnLowMemory(heapGB: Int, name: String, projectID: Project.ID) {
         guard let msg = MemoryGuard.launchWarning(
             heapGB: heapGB, memUsed: systemSampler.systemMemUsed, memTotal: systemSampler.totalMem,
             swapUsed: systemSampler.systemSwapUsed, swapTotal: systemSampler.systemSwapTotal)
         else { return }
-        route(NotificationItem(title: "Low memory — starting \(name)", body: msg,
-                               category: .pressure, severity: .passive, projectID: projectID, action: .none))
+        let keep = projects.first { $0.id == projectID }
+        let others = otherLiveServerCount(keeping: keep)
+        route(NotificationItem(
+            title: "Low memory — starting \(name)",
+            body: others > 0 ? msg + " \(others) other server\(others == 1 ? " is" : "s are") running." : msg,
+            category: .pressure, severity: .passive, projectID: projectID,
+            action: others > 0 ? .freeMemory : .none))
     }
 
     /// Edge-triggered high-swap warning: fires ONCE when system swap climbs past the threshold, and
@@ -319,6 +335,11 @@ final class AppState {
     /// freezes the Mac, without spamming. Distinct from the stuck-machine pressure alert. Called from
     /// the 30 s tick. See `MemoryGuard.swapCrossing`.
     @ObservationIgnored private var swapWarned = false
+    /// Per runner (`"dev:<id>"` / `"preview:<id>"`): when a connection to it was last seen. Feeds idle
+    /// auto-stop alongside launch time and log output — see `checkIdleServers`.
+    @ObservationIgnored var lastConnectionAt: [String: Date] = [:]
+    /// An idle check is scanning sockets off the main actor; the next tick skips instead of piling up.
+    @ObservationIgnored var idleCheckInFlight = false
     private func checkSwapPressure() {
         let r = MemoryGuard.swapCrossing(swapPercent: systemSampler.systemSwapPercent, wasWarned: swapWarned)
         swapWarned = r.warned
@@ -362,6 +383,98 @@ final class AppState {
 
     /// Stop every supervised server (pressure relief / Doctor "stop dev servers").
     func stopAllSessions() { for s in sessions.values { s.stop() } }
+
+    // MARK: - Memory relief
+
+    /// Stop every supervised server (dev and preview) except `keep`'s — the explicit "I'm only
+    /// working on this one" way to hand RAM back. A user-level app can't make macOS drop its caches
+    /// (`purge` and `memory_pressure -S` both need root), so stopping processes is the one real lever,
+    /// and this is the pull that frees the most at once. Returns how many servers were stopped and
+    /// roughly how much they held: their trees' physical footprint at the last 1 s sample.
+    @discardableResult
+    func stopOtherServers(keeping keep: Project?) -> (count: Int, bytes: Double) {
+        var count = 0, bytes = 0.0
+        for runner in Array(sessions.values) + Array(previews.values)
+        where runner.state.isActive && runner.project.id != keep?.id {
+            bytes += runner.history.last?.treeMem ?? 0
+            runner.stop()
+            count += 1
+        }
+        guard count > 0 else { return (0, 0) }
+        let mb = bytes / 1_048_576
+        let freed = mb >= 1024 ? String(format: "%.1f GB", mb / 1024) : "\(Int(mb)) MB"
+        route(NotificationItem(
+            title: "Stopped \(count) server\(count == 1 ? "" : "s")",
+            body: "Freed about \(freed) of memory" + (keep.map { " — \($0.name) kept running." } ?? "."),
+            category: .pressure, severity: .passive, projectID: nil, action: .none))
+        AppLog.shared.event("Memory relief: stopped \(count) server(s), ~\(Int(mb)) MB")
+        return (count, bytes)
+    }
+
+    /// How many servers `stopOtherServers(keeping:)` would stop right now (drives its menu item).
+    func otherLiveServerCount(keeping keep: Project?) -> Int {
+        (Array(sessions.values) + Array(previews.values))
+            .filter { $0.state.isActive && $0.project.id != keep?.id }.count
+    }
+
+    // MARK: - Zombie servers
+
+    /// `<id>:<kind>` of every runner that's live right now — the tag a process must carry to count as
+    /// supervised rather than orphaned (see OrphanReaper).
+    private var supervisedRunnerKeys: Set<String> {
+        var keys = Set<String>()
+        for (id, s) in sessions where s.state.isActive { keys.insert(OrphanReaper.key(projectID: id, kind: "dev")) }
+        for (id, p) in previews where p.state.isActive { keys.insert(OrphanReaper.key(projectID: id, kind: "preview")) }
+        for (id, w) in workers where w.isRunning { keys.insert(OrphanReaper.key(projectID: id, kind: "worker")) }
+        for (id, b) in builds where b.isRunning { keys.insert(OrphanReaper.key(projectID: id, kind: "build")) }
+        return keys
+    }
+
+    /// Find and kill zombie servers (see OrphanReaper). The scan runs off the main actor.
+    ///
+    /// With `recover` — the launch-time pass — each dev server, preview and worker that was still
+    /// running as a zombie is relaunched, supervised this time: after Owl Monitor quits unexpectedly,
+    /// the servers you had up come back instead of lingering invisibly (holding their ports and RAM
+    /// while the app called them "Idle"). A build is never re-run; a half-finished one is just
+    /// cleaned up. Without `recover` — the periodic safety net — orphans are only removed.
+    func sweepOrphans(recover: Bool) {
+        let supervised = supervisedRunnerKeys
+        Task { @MainActor [weak self] in
+            let orphans = await Task.detached(priority: .utility) {
+                OrphanReaper.scan(supervised: supervised)
+            }.value
+            guard let self, !orphans.isEmpty else { return }
+            OrphanReaper.reap(orphans)
+
+            let names = Set(orphans.map(\.projectID))
+                .compactMap { id in self.projects.first { $0.id == id }?.name }.sorted()
+            AppLog.shared.event("OrphanReaper: reaped \(orphans.count) orphaned tree(s) (\(names.joined(separator: ", "))), recover=\(recover)")
+
+            guard recover else {
+                self.route(NotificationItem(
+                    title: "Cleaned up \(orphans.count) orphaned process\(orphans.count == 1 ? "" : "es")",
+                    body: "Left running unsupervised by \(names.joined(separator: ", ")). Their ports and memory are free again.",
+                    category: .pressure, severity: .passive, projectID: nil, action: .none))
+                return
+            }
+
+            // Let the reaped trees actually die (the SIGKILL pass lands at ~2 s) so each server gets its
+            // old port back rather than drifting to the next one past a dying zombie.
+            try? await Task.sleep(for: .milliseconds(2500))
+            var recovered: [String] = []
+            for (id, kinds) in Dictionary(grouping: orphans, by: \.projectID).mapValues({ Set($0.map(\.kind)) }) {
+                guard let project = self.projects.first(where: { $0.id == id }) else { continue }
+                if kinds.contains("dev") { self.launch(project); recovered.append(project.name) }
+                else if kinds.contains("preview") { self.startPreview(project); recovered.append("\(project.name) (preview)") }
+                if kinds.contains("worker") { self.startWorker(project) }
+            }
+            guard !recovered.isEmpty else { return }
+            self.route(NotificationItem(
+                title: "Recovered \(recovered.count) server\(recovered.count == 1 ? "" : "s")",
+                body: "Owl Monitor quit unexpectedly and left them running unsupervised. They're back under supervision: \(recovered.sorted().joined(separator: ", ")).",
+                category: .recovery, severity: .passive, projectID: nil, action: .none))
+        }
+    }
 
     /// Reap every supervised server, build, worker and preview process tree on app quit, so nothing
     /// is left orphaned holding a port (they run in their own session via SETSID and would otherwise
@@ -434,8 +547,8 @@ final class AppState {
         stopSiblings(of: "preview", for: project)   // only one of dev/build/preview runs per project
         let preview = DevSession(project: project, commandOverride: cmd)
         previews[project.id] = preview
-        let heapGB = effectiveBuildMemoryGB(for: project)
-        preview.start(memoryGB: heapGB)
+        let heapGB = launchHeapGB(for: project, preview: true)
+        preview.start(memoryGB: heapGB, reservedPorts: reservedPorts(excluding: project.id))
         warnLowMemory(heapGB: heapGB, name: "\(project.name) · preview", projectID: project.id)
     }
 

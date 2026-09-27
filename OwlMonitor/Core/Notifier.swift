@@ -42,12 +42,16 @@ final class Notifier {
             let restart = UNNotificationAction(identifier: "RESTART", title: "Restart", options: [.foreground])
             let open = UNNotificationAction(identifier: "OPEN", title: "Open", options: [.foreground])
             let openLogs = UNNotificationAction(identifier: "OPEN_LOGS", title: "Open logs", options: [.foreground])
+            // Background: stopping the other servers needs no window — the banner just goes away.
+            let stopOthers = UNNotificationAction(identifier: "STOP_OTHERS", title: "Stop Other Servers", options: [])
             let categories: Set<UNNotificationCategory> = [
                 UNNotificationCategory(identifier: "RESTART_OPEN", actions: [restart, open],
                                        intentIdentifiers: [], options: []),
                 UNNotificationCategory(identifier: "OPEN_LOGS", actions: [openLogs],
                                        intentIdentifiers: [], options: []),
                 UNNotificationCategory(identifier: "OPEN", actions: [open],
+                                       intentIdentifiers: [], options: []),
+                UNNotificationCategory(identifier: "FREE_MEMORY", actions: [stopOthers, open],
                                        intentIdentifiers: [], options: []),
             ]
             UNUserNotificationCenter.current().setNotificationCategories(categories)

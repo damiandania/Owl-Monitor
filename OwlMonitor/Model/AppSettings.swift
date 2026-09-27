@@ -13,6 +13,12 @@ struct AppSettings: Codable, Sendable, Equatable {
     var autoCloseOrphans: Bool
     /// Heap (GB) applied to new projects whose framework has no specific default.
     var defaultMemoryGB: Int
+    /// Share RAM between servers: in auto heap mode, each launch gets an even split of the RAM left
+    /// after macOS instead of the full learned heap (see `MemoryGuard.budgetedHeapGB`).
+    var shareHeapBudget: Bool
+    /// Stop a dev server or preview nobody has used (no browser connection, no output) for this many
+    /// minutes. 0 = never.
+    var idleStopMinutes: Int
     /// Which activity bars to show on the dashboard (ids from `allBars`).
     var bars: [String]
     /// Show the live metric timeline charts (Activity timeline accordion + per-project charts).
@@ -40,6 +46,8 @@ struct AppSettings: Codable, Sendable, Equatable {
          analysisModel: String = AppSettings.defaultModel,
          autoCloseOrphans: Bool = true,
          defaultMemoryGB: Int = 4,
+         shareHeapBudget: Bool = true,
+         idleStopMinutes: Int = 0,
          bars: [String] = AppSettings.defaultBars,
          showCharts: Bool = true,
          theme: String = "system",
@@ -56,6 +64,8 @@ struct AppSettings: Codable, Sendable, Equatable {
         self.analysisModel = analysisModel
         self.autoCloseOrphans = autoCloseOrphans
         self.defaultMemoryGB = defaultMemoryGB
+        self.shareHeapBudget = shareHeapBudget
+        self.idleStopMinutes = idleStopMinutes
         self.bars = bars
         self.showCharts = showCharts
         self.theme = theme
@@ -71,16 +81,18 @@ struct AppSettings: Codable, Sendable, Equatable {
 
     // Tolerant decode so older settings.json (missing keys) still loads.
     enum CodingKeys: String, CodingKey {
-        case browser, editor, analysisModel, autoCloseOrphans, defaultMemoryGB, bars, showCharts, theme, terminalTheme, language
+        case browser, editor, analysisModel, autoCloseOrphans, defaultMemoryGB, shareHeapBudget, idleStopMinutes, bars, showCharts, theme, terminalTheme, language
         case notificationsEnabled, notifyFailures, notifyRecovery, notifyBuilds, notifyPressure, notifyWebhookURL
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         browser = try c.decodeIfPresent(String.self, forKey: .browser)
         editor = try c.decodeIfPresent(String.self, forKey: .editor)
-        analysisModel = try c.decodeIfPresent(String.self, forKey: .analysisModel) ?? AppSettings.defaultModel
+        analysisModel = AppSettings.currentModel(for: try c.decodeIfPresent(String.self, forKey: .analysisModel))
         autoCloseOrphans = try c.decodeIfPresent(Bool.self, forKey: .autoCloseOrphans) ?? true
         defaultMemoryGB = try c.decodeIfPresent(Int.self, forKey: .defaultMemoryGB) ?? 4
+        shareHeapBudget = try c.decodeIfPresent(Bool.self, forKey: .shareHeapBudget) ?? true
+        idleStopMinutes = try c.decodeIfPresent(Int.self, forKey: .idleStopMinutes) ?? 0
         bars = try c.decodeIfPresent([String].self, forKey: .bars) ?? AppSettings.defaultBars
         showCharts = try c.decodeIfPresent(Bool.self, forKey: .showCharts) ?? true
         theme = try c.decodeIfPresent(String.self, forKey: .theme) ?? "system"
@@ -94,7 +106,7 @@ struct AppSettings: Codable, Sendable, Equatable {
         notifyWebhookURL = try c.decodeIfPresent(String.self, forKey: .notifyWebhookURL) ?? ""
     }
 
-    static let defaultModel = "claude-haiku-4-5"
+    static let defaultModel = "claude-haiku-4-5-20251001"
 
     /// Appearance options for the theme picker.
     struct ThemeOption: Identifiable, Sendable { let id: String; let label: String; let icon: String }
@@ -142,10 +154,26 @@ struct AppSettings: Codable, Sendable, Equatable {
     /// Models offered for analysis (newest Claude family).
     struct ModelOption: Identifiable, Sendable { let id: String; let label: String }
     static let models: [ModelOption] = [
-        .init(id: "claude-haiku-4-5", label: "Haiku 4.5 — fast (default)"),
-        .init(id: "claude-sonnet-4-6", label: "Sonnet 4.6 — balanced"),
-        .init(id: "claude-opus-4-8", label: "Opus 4.8 — deep"),
+        .init(id: "claude-haiku-4-5-20251001", label: "Haiku 4.5 — fast (default)"),
+        .init(id: "claude-sonnet-5", label: "Sonnet 5 — balanced"),
+        .init(id: "claude-opus-5-5", label: "Opus 5.5 — deep"),
     ]
+
+    /// A saved model ID mapped onto today's list. IDs retire as new models ship, and a retired one
+    /// would leave the picker blank and make every `claude --model` call fail — so a stale ID moves
+    /// to the newest model of the SAME tier (an old Sonnet becomes the current Sonnet), and anything
+    /// unrecognisable falls back to the default.
+    static func currentModel(for saved: String?) -> String {
+        guard let saved, !saved.isEmpty else { return defaultModel }
+        if models.contains(where: { $0.id == saved }) { return saved }
+        for tier in ["haiku", "sonnet", "opus"] where saved.contains(tier) {
+            if let match = models.first(where: { $0.id.contains(tier) }) { return match.id }
+        }
+        return defaultModel
+    }
+
+    /// Choices for `idleStopMinutes` (0 = never).
+    static let idleStopChoices = [0, 15, 30, 60, 120]
 
     /// Activity bars: CPU/Memory/Swap/Temperature on by default; the rest are optional.
     static let defaultBars = ["cpu", "memory", "swap", "temp"]

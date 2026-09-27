@@ -22,13 +22,45 @@ import Darwin
 /// multishell dir is reaped) → the next relaunch fails with 127 again. Resolving shortly before each
 /// (re)launch yields a live multishell dir that stays valid for the few seconds the server needs to
 /// boot. The short TTL keeps a burst of crash auto-restarts from re-running a shell every time.
+///
+/// KEEPING IT OFF THE MAIN THREAD: resolving means waiting on a login shell (0.3–1 s with p10k/fnm,
+/// up to the 4 s timeout), and `applyResolvedPATH` is called from `DevSession.start` on the main
+/// actor — so every cache miss froze the UI, i.e. nearly every manual launch, since the TTL is short.
+/// Now the cache is warmed off the main thread whenever a launch is likely (`prefetch`: the app comes
+/// to the front, a project is selected), and every path that is already async — a CLI `up`, a crash
+/// auto-restart, a recycle — `await`s `refresh()` before starting. The blocking resolve in
+/// `applyResolvedPATH` is only the last-resort fallback now.
 @MainActor
 enum ShellEnvironment {
-    private static let startMarker = "__DM_PATH_START__"
-    private static let endMarker = "__DM_PATH_END__"
+    nonisolated private static let startMarker = "__DM_PATH_START__"
+    nonisolated private static let endMarker = "__DM_PATH_END__"
     private static let ttl: TimeInterval = 30
 
     private static var cached: (path: String, at: Date)?
+    /// The in-flight background resolve, shared so concurrent callers await one shell, not several.
+    private static var inFlight: Task<Void, Never>?
+
+    /// Make the cache fresh without blocking the main thread: resolve in the background if it's
+    /// stale, and suspend (not block) until that finishes. Awaited by every async launch path.
+    static func refresh() async {
+        if let c = cached, Date().timeIntervalSince(c.at) < ttl { return }
+        if inFlight == nil {
+            inFlight = Task {
+                let fresh = await Task.detached(priority: .userInitiated) { resolveLoginPATH() }.value
+                if let fresh { cached = (fresh, Date()) }
+                inFlight = nil
+            }
+        }
+        await inFlight?.value
+    }
+
+    /// Fire-and-forget `refresh()` for when a launch is merely LIKELY soon (the app was activated, a
+    /// project was selected), so the launch itself finds a fresh cache. Skips when the cache is still
+    /// comfortably fresh, so frequent triggers don't keep spawning shells.
+    static func prefetch() {
+        if let c = cached, Date().timeIntervalSince(c.at) < ttl / 2 { return }
+        Task { await refresh() }
+    }
 
     /// Resolve the user's login+interactive PATH and export it into this process so any child spawned
     /// afterwards (the dev server, via `dm_spawn_session`, which inherits the process environment) can
@@ -55,7 +87,7 @@ enum ShellEnvironment {
     /// Run the user's login+interactive shell to print its `$PATH`. Returns nil on any failure.
     /// Bounded by `timeout` so a slow/hanging rc file (p10k, networked mounts) can never block a
     /// launch indefinitely.
-    static func resolveLoginPATH(timeout: TimeInterval = 4) -> String? {
+    nonisolated static func resolveLoginPATH(timeout: TimeInterval = 4) -> String? {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: shell)
