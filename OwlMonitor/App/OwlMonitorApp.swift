@@ -89,8 +89,15 @@ struct ServerCommands: Commands {
 
             // Hand RAM back in one go: stop every server except the one you're working on.
             let others = app.otherLiveServerCount(keeping: project)
-            Button(others > 0 ? "Stop \(others) Other Server\(others == 1 ? "" : "s")" : "Stop Other Servers") {
+            Button {
                 app.stopOtherServers(keeping: app.selectedProject)
+            } label: {
+                // Separate keys (not one interpolated string) so each language gets a real sentence.
+                switch others {
+                case 0: Text("Stop Other Servers")
+                case 1: Text("Stop 1 Other Server")
+                default: Text("Stop \(others) Other Servers")
+                }
             }
             .keyboardShortcut(".", modifiers: [.command, .option])
             .disabled(others == 0)
