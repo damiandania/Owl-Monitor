@@ -55,8 +55,9 @@ final class BuildRunner {
         // node exit immediately (code 9), failing every build. Keep it to --max-old-space-size.
         let nodeOpts = ProcessSupport.nodeHeapFlag(memoryGB: memoryGB)
         let userEnv = ProcessSupport.envAssignments(project.env)
-        let command = "\(userEnv)NODE_OPTIONS='\(nodeOpts)' FORCE_COLOR=0 exec \(buildCommand)"
-        let header = "$ \(command)  (cwd: \(project.path))"
+        let launch = "NODE_OPTIONS='\(nodeOpts)' FORCE_COLOR=0 exec \(buildCommand)"
+        let command = "\(userEnv)\(launch)"
+        let header = ProcessSupport.displayCommand(env: project.env, rest: launch, cwd: project.path)
         logLines = [header]
         lineBuffer.reset()
         openLogFile(header: header)

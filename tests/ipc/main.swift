@@ -35,6 +35,19 @@ chk(line != nil, "readLine returned a frame")
 let decoded = line.flatMap { try? JSONDecoder().decode(IPCMessage.self, from: $0) }
 chk(decoded?.type == "ok" && decoded?.message == "launched dm (Nuxt, 8 GB)", "framed write→read roundtrip")
 
+// 3b) A request line over IPCIO.maxRequestBytes is refused (nil), not buffered without bound — and
+// the ceiling leaves plenty of room for a real request.
+let bigURL = URL(fileURLWithPath: NSTemporaryDirectory() + "dm-ipc-big-\(getpid()).txt")
+try? (String(repeating: "a", count: IPCIO.maxRequestBytes + 10) + "\n").write(to: bigURL, atomically: true, encoding: .utf8)
+let bigFD = open(bigURL.path, O_RDONLY)
+chk(bigFD >= 0 && IPCIO.readLine(bigFD) == nil, "ipc: oversized request line is refused")
+if bigFD >= 0 { close(bigFD) }
+try? (String(repeating: "b", count: 4096) + "\n").write(to: bigURL, atomically: true, encoding: .utf8)
+let okFD = open(bigURL.path, O_RDONLY)
+chk(okFD >= 0 && IPCIO.readLine(okFD)?.count == 4096, "ipc: a 4 KB request line still reads whole")
+if okFD >= 0 { close(okFD) }
+try? FileManager.default.removeItem(at: bigURL)
+
 // 4) A8: the hub socket is owner-only (0600) and the LOCAL_PEERCRED check reports our own UID.
 let sockPath = NSTemporaryDirectory() + "dm-ipc-test-\(getpid()).sock"
 unlink(sockPath)
@@ -54,6 +67,13 @@ if lfd >= 0 {
     if afd >= 0 {
         chk(dm_ipc_peer_uid(afd) == Int32(getuid()),
             "ipc: peer uid == our uid", "\(dm_ipc_peer_uid(afd)) vs \(getuid())")
+        // A client that connects and never sends its newline must not wedge the hub's single accept
+        // thread: dm_ipc_accept bounds the read (SO_RCVTIMEO 5 s), so readLine gives up with nil.
+        let t0 = Date()
+        let stalled = IPCIO.readLine(afd)
+        let waited = Date().timeIntervalSince(t0)
+        chk(stalled == nil && waited >= 4 && waited < 8,
+            "ipc: a stalled client times out instead of blocking forever", String(format: "%.1fs", waited))
         close(afd)
     }
     if cfd >= 0 { close(cfd) }

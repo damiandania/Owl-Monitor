@@ -80,15 +80,20 @@ enum ClaudeRunner {
         let box = ProcBox()
         let process = box.process
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        let modelFlag = model.map { " --model \($0)" } ?? ""
-        process.arguments = ["-lc",
-            "claude -p --output-format json --permission-mode plan\(modelFlag) "
-            + "--disallowed-tools 'Edit Write MultiEdit NotebookEdit' --no-session-persistence"]
+        // The model id is handed to the script as a positional parameter (`"$1"`), never spliced into
+        // the script text: it's read back from settings.json on disk, so an interpolated value like
+        // `x; curl … | sh` would be executed by the login shell. `zsh` fills `$0`.
+        let script = "claude -p --output-format json --permission-mode plan "
+            + "--disallowed-tools 'Edit Write MultiEdit NotebookEdit' --no-session-persistence"
+            + (model == nil ? "" : " --model \"$1\"")
+        process.arguments = ["-lc", script, "zsh"] + (model.map { [$0] } ?? [])
         process.currentDirectoryURL = URL(fileURLWithPath: cwd)
-        let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
+        let stdin = Pipe(), stdout = Pipe()
         process.standardInput = stdin
         process.standardOutput = stdout
-        process.standardError = stderr
+        // Discarded, not piped: nothing ever read the old stderr pipe, so a chatty `claude` (>~64 KB
+        // of warnings) filled its buffer and blocked forever — hanging the Doctor with no way out.
+        process.standardError = FileHandle.nullDevice
 
         return await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Report, Never>) in

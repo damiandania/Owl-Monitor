@@ -135,13 +135,14 @@ final class DevSession {
         reapLeftovers(pinnedPort: pinnedPort)
         let fwEnv = Self.frameworkEnv(for: project.framework)
         let userEnv = ProcessSupport.envAssignments(project.env)
-        let command = "\(userEnv)\(fwEnv)NODE_OPTIONS=\(ProcessSupport.nodeHeapFlag(memoryGB: memoryGB)) FORCE_COLOR=1 \(portEnv)exec \(baseCommand)"
-        append(line: "$ \(command)  (cwd: \(project.path))")
+        let launch = "\(fwEnv)NODE_OPTIONS=\(ProcessSupport.nodeHeapFlag(memoryGB: memoryGB)) FORCE_COLOR=1 \(portEnv)exec \(baseCommand)"
+        let command = "\(userEnv)\(launch)"
+        append(line: ProcessSupport.displayCommand(env: project.env, rest: launch, cwd: project.path))
 
         guard let proc = SpawnedProcess.spawn(command: command, cwd: project.path, wantsStdin: true) else {
             lastError = "spawn failed — could not start the dev command"
             state = .failed("spawn failed")
-            AppLog.shared.event("DevSession: spawn failed for \(project.name) — cmd: \(command)")
+            AppLog.shared.event("DevSession: spawn failed for \(project.name) — cmd: \(launch)")
             return
         }
         pid = proc.pid

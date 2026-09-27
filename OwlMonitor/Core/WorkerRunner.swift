@@ -57,14 +57,15 @@ final class WorkerRunner {
         // making its whole tree enumerable (by session) and killable (by killpg) — same as the server.
         let nodeOpts = ProcessSupport.nodeHeapFlag(memoryGB: memoryGB)
         let userEnv = ProcessSupport.envAssignments(project.env)
-        let command = "\(userEnv)NODE_OPTIONS=\(nodeOpts) FORCE_COLOR=1 exec \(baseCommand)"
-        append(line: "$ \(command)  (cwd: \(project.path))")
+        let launch = "NODE_OPTIONS=\(nodeOpts) FORCE_COLOR=1 exec \(baseCommand)"
+        let command = "\(userEnv)\(launch)"
+        append(line: ProcessSupport.displayCommand(env: project.env, rest: launch, cwd: project.path))
 
         guard let proc = SpawnedProcess.spawn(command: command, cwd: project.path, wantsStdin: true) else {
             isRunning = false
             didCrash = true
             append(line: "worker: failed to spawn")
-            AppLog.shared.event("WorkerRunner: spawn failed for \(project.name) — cmd: \(command)")
+            AppLog.shared.event("WorkerRunner: spawn failed for \(project.name) — cmd: \(launch)")
             return
         }
         pid = proc.pid
