@@ -13,6 +13,12 @@ struct AppSettings: Codable, Sendable, Equatable {
     var autoCloseOrphans: Bool
     /// Heap (GB) applied to new projects whose framework has no specific default.
     var defaultMemoryGB: Int
+    /// Share RAM between servers: in auto heap mode, each launch gets an even split of the RAM left
+    /// after macOS instead of the full learned heap (see `MemoryGuard.budgetedHeapGB`).
+    var shareHeapBudget: Bool
+    /// Stop a dev server or preview nobody has used (no browser connection, no output) for this many
+    /// minutes. 0 = never.
+    var idleStopMinutes: Int
     /// Which activity bars to show on the dashboard (ids from `allBars`).
     var bars: [String]
     /// Show the live metric timeline charts (Activity timeline accordion + per-project charts).
@@ -40,6 +46,8 @@ struct AppSettings: Codable, Sendable, Equatable {
          analysisModel: String = AppSettings.defaultModel,
          autoCloseOrphans: Bool = true,
          defaultMemoryGB: Int = 4,
+         shareHeapBudget: Bool = true,
+         idleStopMinutes: Int = 0,
          bars: [String] = AppSettings.defaultBars,
          showCharts: Bool = true,
          theme: String = "system",
@@ -56,6 +64,8 @@ struct AppSettings: Codable, Sendable, Equatable {
         self.analysisModel = analysisModel
         self.autoCloseOrphans = autoCloseOrphans
         self.defaultMemoryGB = defaultMemoryGB
+        self.shareHeapBudget = shareHeapBudget
+        self.idleStopMinutes = idleStopMinutes
         self.bars = bars
         self.showCharts = showCharts
         self.theme = theme
@@ -71,7 +81,7 @@ struct AppSettings: Codable, Sendable, Equatable {
 
     // Tolerant decode so older settings.json (missing keys) still loads.
     enum CodingKeys: String, CodingKey {
-        case browser, editor, analysisModel, autoCloseOrphans, defaultMemoryGB, bars, showCharts, theme, terminalTheme, language
+        case browser, editor, analysisModel, autoCloseOrphans, defaultMemoryGB, shareHeapBudget, idleStopMinutes, bars, showCharts, theme, terminalTheme, language
         case notificationsEnabled, notifyFailures, notifyRecovery, notifyBuilds, notifyPressure, notifyWebhookURL
     }
     init(from decoder: Decoder) throws {
@@ -81,6 +91,8 @@ struct AppSettings: Codable, Sendable, Equatable {
         analysisModel = AppSettings.currentModel(for: try c.decodeIfPresent(String.self, forKey: .analysisModel))
         autoCloseOrphans = try c.decodeIfPresent(Bool.self, forKey: .autoCloseOrphans) ?? true
         defaultMemoryGB = try c.decodeIfPresent(Int.self, forKey: .defaultMemoryGB) ?? 4
+        shareHeapBudget = try c.decodeIfPresent(Bool.self, forKey: .shareHeapBudget) ?? true
+        idleStopMinutes = try c.decodeIfPresent(Int.self, forKey: .idleStopMinutes) ?? 0
         bars = try c.decodeIfPresent([String].self, forKey: .bars) ?? AppSettings.defaultBars
         showCharts = try c.decodeIfPresent(Bool.self, forKey: .showCharts) ?? true
         theme = try c.decodeIfPresent(String.self, forKey: .theme) ?? "system"
@@ -159,6 +171,9 @@ struct AppSettings: Codable, Sendable, Equatable {
         }
         return defaultModel
     }
+
+    /// Choices for `idleStopMinutes` (0 = never).
+    static let idleStopChoices = [0, 15, 30, 60, 120]
 
     /// Activity bars: CPU/Memory/Swap/Temperature on by default; the rest are optional.
     static let defaultBars = ["cpu", "memory", "swap", "temp"]

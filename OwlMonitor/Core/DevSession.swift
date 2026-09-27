@@ -56,7 +56,15 @@ final class DevSession {
     private var strikes = 0
     private var hasBeenHealthy = false
     private var recycling = false
-    private var lastMemoryGB = 4
+    /// The heap (GB) the current/last launch actually got — which, with the shared-memory budget, can
+    /// be below the project's learned level. Read by the CLI's launch reply.
+    private(set) var lastMemoryGB = 4
+    /// When the server last printed anything: a request log, an HMR rebuild after a file save. One of
+    /// the activity signals behind idle auto-stop. Not observed — no view needs a redraw per chunk.
+    @ObservationIgnored private(set) var lastOutputAt = Date()
+    /// Recognises the server's log line for our own health probe, which must not count as output
+    /// activity (Astro logs every request) — see `MemoryGuard.probeEchoPattern`.
+    @ObservationIgnored private lazy var probeEcho = MemoryGuard.probeEchoPattern(path: project.effectiveHealthPath)
     private let probeInterval: Duration = .seconds(6)
     private let httpTimeout: TimeInterval = 8   // tolerant of a busy server under load
     private let warmHTTPTimeout: TimeInterval = 3   // snappier flip to .running during warm-up
@@ -389,12 +397,15 @@ final class DevSession {
 
     private func ingest(_ data: Data) {
         var fresh: [String] = []
+        var meaningful = false
         for line in lineBuffer.ingest(data) {
             let clean = line.strippedANSI
             if LogNoise.isShellNoise(clean) { continue }
             scanPort(clean)
             fresh.append(line)
+            if !meaningful, !clean.isEmpty, !MemoryGuard.isProbeEcho(clean, pattern: probeEcho) { meaningful = true }
         }
+        if meaningful { lastOutputAt = Date() }
         append(lines: fresh)
     }
 

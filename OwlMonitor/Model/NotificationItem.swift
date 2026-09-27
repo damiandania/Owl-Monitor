@@ -17,6 +17,7 @@ enum NotificationAction: String, Sendable {
     case restartOpen    // crash / failed → "Restart" + "Open"
     case openLogs       // build failed   → "Open logs"
     case open           // pressure       → "Open"
+    case freeMemory     // low memory at launch → "Stop Other Servers" + "Open"
 
     /// The registered `UNNotificationCategory` identifier (nil = no buttons).
     var categoryIdentifier: String? {
@@ -25,6 +26,7 @@ enum NotificationAction: String, Sendable {
         case .restartOpen: return "RESTART_OPEN"
         case .openLogs:    return "OPEN_LOGS"
         case .open:        return "OPEN"
+        case .freeMemory:  return "FREE_MEMORY"
         }
     }
 }

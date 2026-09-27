@@ -67,7 +67,7 @@ build_run session  -enable-bare-slash-regex "$ROOT/tests/session/main.swift" \
   "$SRC/Model/Project.swift" "$SRC/Model/SessionState.swift" "$SRC/Model/MetricsSample.swift" \
   "$SRC/Model/SupervisionEvent.swift" \
   "$SRC/Core/Detector.swift" "$SRC/Core/ProcessTree.swift" "$SRC/Core/DevSession.swift" \
-  "$SRC/Core/ShellEnvironment.swift" "$SRC/Core/HeapScaling.swift" \
+  "$SRC/Core/ShellEnvironment.swift" "$SRC/Core/HeapScaling.swift" "$SRC/Core/MemoryGuard.swift" \
   "$SRC/Core/BuildRunner.swift" "$SRC/Core/WorkerRunner.swift" "$SRC/Core/ANSI.swift" "$SRC/Core/AppLog.swift" \
   "$SRC/Core/ProcessSupport.swift" "$SRC/Core/LineBuffer.swift" "$SRC/Core/LogNoise.swift" \
   "$SRC/Core/SpawnedProcess.swift" "$SRC/Core/LogFilter.swift" \

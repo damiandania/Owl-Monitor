@@ -142,6 +142,7 @@ final class AppState {
                 self.checkSwapPressure()
                 self.checkExternalProcesses()
                 self.sweepOrphans(recover: false)
+                self.checkIdleServers()
             }
         }
         // Wire notifications: set the UN delegate (foreground presentation + action routing),
@@ -290,10 +291,10 @@ final class AppState {
             self?.route(NotificationPolicy.make(from: event, projectID: project.id))
         }
         // Persist the heap level the OOM autoscaler learns (AUTO mode), so the next launch starts
-        // there instead of replaying 4→6→8.
-        session.onHeapEscalated = { [weak self] gb in self?.setAutoHeapGB(gb, for: project.id) }
+        // there instead of replaying 4→6→8 — and as the floor the shared-memory budget respects.
+        session.onHeapEscalated = { [weak self] gb in self?.recordHeapEscalation(gb, for: project.id) }
         sessions[project.id] = session
-        let heapGB = effectiveMemoryGB(for: project)
+        let heapGB = launchHeapGB(for: project, preview: false)
         session.start(memoryGB: heapGB, reservedPorts: reservedPorts(excluding: project.id))
         warnLowMemory(heapGB: heapGB, name: project.name, projectID: project.id)
     }
@@ -312,13 +313,21 @@ final class AppState {
     /// claim `heapGB` risks heavy swapping on this RAM-constrained Mac. Posts a passive `.pressure`
     /// notification (feed + history + a silent banner if that category is on); the server still
     /// starts. No-op when there's enough headroom. See `MemoryGuard.launchWarning`.
+    ///
+    /// When other servers are running, the banner carries a "Stop Other Servers" button — the one
+    /// action that actually makes room — which keeps this project and stops the rest.
     private func warnLowMemory(heapGB: Int, name: String, projectID: Project.ID) {
         guard let msg = MemoryGuard.launchWarning(
             heapGB: heapGB, memUsed: systemSampler.systemMemUsed, memTotal: systemSampler.totalMem,
             swapUsed: systemSampler.systemSwapUsed, swapTotal: systemSampler.systemSwapTotal)
         else { return }
-        route(NotificationItem(title: "Low memory — starting \(name)", body: msg,
-                               category: .pressure, severity: .passive, projectID: projectID, action: .none))
+        let keep = projects.first { $0.id == projectID }
+        let others = otherLiveServerCount(keeping: keep)
+        route(NotificationItem(
+            title: "Low memory — starting \(name)",
+            body: others > 0 ? msg + " \(others) other server\(others == 1 ? " is" : "s are") running." : msg,
+            category: .pressure, severity: .passive, projectID: projectID,
+            action: others > 0 ? .freeMemory : .none))
     }
 
     /// Edge-triggered high-swap warning: fires ONCE when system swap climbs past the threshold, and
@@ -326,6 +335,11 @@ final class AppState {
     /// freezes the Mac, without spamming. Distinct from the stuck-machine pressure alert. Called from
     /// the 30 s tick. See `MemoryGuard.swapCrossing`.
     @ObservationIgnored private var swapWarned = false
+    /// Per runner (`"dev:<id>"` / `"preview:<id>"`): when a connection to it was last seen. Feeds idle
+    /// auto-stop alongside launch time and log output — see `checkIdleServers`.
+    @ObservationIgnored var lastConnectionAt: [String: Date] = [:]
+    /// An idle check is scanning sockets off the main actor; the next tick skips instead of piling up.
+    @ObservationIgnored var idleCheckInFlight = false
     private func checkSwapPressure() {
         let r = MemoryGuard.swapCrossing(swapPercent: systemSampler.systemSwapPercent, wasWarned: swapWarned)
         swapWarned = r.warned
@@ -533,7 +547,7 @@ final class AppState {
         stopSiblings(of: "preview", for: project)   // only one of dev/build/preview runs per project
         let preview = DevSession(project: project, commandOverride: cmd)
         previews[project.id] = preview
-        let heapGB = effectiveBuildMemoryGB(for: project)
+        let heapGB = launchHeapGB(for: project, preview: true)
         preview.start(memoryGB: heapGB, reservedPorts: reservedPorts(excluding: project.id))
         warnLowMemory(heapGB: heapGB, name: "\(project.name) · preview", projectID: project.id)
     }

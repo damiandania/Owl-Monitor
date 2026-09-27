@@ -440,6 +440,81 @@ int dm_proc_args(pid_t pid, char *buf, int size) {
     return written;
 }
 
+// One TCP socket of a process, reduced to what the inbound count needs.
+typedef struct { int lport; int fport; int state; } dm_tcp_sock;
+
+// Append every TCP socket `pid` holds to the growable array `*socks` (count `*n`, capacity `*cap`).
+static void dm_collect_tcp(pid_t pid, dm_tcp_sock **socks, int *n, int *cap) {
+    int bufSize = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
+    if (bufSize <= 0) {
+        return;
+    }
+    struct proc_fdinfo *fds = (struct proc_fdinfo *)malloc((size_t)bufSize);
+    if (fds == NULL) {
+        return;
+    }
+    int got = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fds, bufSize);
+    int count = (got > 0) ? got / (int)sizeof(struct proc_fdinfo) : 0;
+    for (int i = 0; i < count; i++) {
+        if (fds[i].proc_fdtype != PROX_FDTYPE_SOCKET) {
+            continue;
+        }
+        struct socket_fdinfo si;
+        int r = proc_pidfdinfo(pid, fds[i].proc_fd, PROC_PIDFDSOCKETINFO, &si, PROC_PIDFDSOCKETINFO_SIZE);
+        if (r < (int)PROC_PIDFDSOCKETINFO_SIZE || si.psi.soi_kind != SOCKINFO_TCP) {
+            continue;
+        }
+        if (*n == *cap) {
+            int grown = *cap > 0 ? *cap * 2 : 64;
+            dm_tcp_sock *bigger = (dm_tcp_sock *)realloc(*socks, sizeof(dm_tcp_sock) * (size_t)grown);
+            if (bigger == NULL) break;
+            *socks = bigger;
+            *cap = grown;
+        }
+        struct tcp_sockinfo *t = &si.psi.soi_proto.pri_tcp;
+        (*socks)[*n].lport = ntohs((uint16_t)t->tcpsi_ini.insi_lport);
+        (*socks)[*n].fport = ntohs((uint16_t)t->tcpsi_ini.insi_fport);
+        (*socks)[*n].state = t->tcpsi_state;
+        (*n)++;
+    }
+    free(fds);
+}
+
+static int dm_port_in(int port, const dm_tcp_sock *socks, int n, int listeningOnly) {
+    for (int i = 0; i < n; i++) {
+        if (socks[i].lport == port && (!listeningOnly || socks[i].state == TCPS_LISTEN)) return 1;
+    }
+    return 0;
+}
+
+int dm_tree_inbound_count(const pid_t *tree, int ntree, pid_t exclude_peer) {
+    // Every TCP socket of the tree, and separately the excluded peer's.
+    dm_tcp_sock *mine = NULL, *peer = NULL;
+    int nmine = 0, capMine = 0, npeer = 0, capPeer = 0;
+    for (int i = 0; i < ntree; i++) {
+        if (tree[i] > 0) dm_collect_tcp(tree[i], &mine, &nmine, &capMine);
+    }
+    if (exclude_peer > 0) dm_collect_tcp(exclude_peer, &peer, &npeer, &capPeer);
+
+    // An ESTABLISHED socket on a port the tree LISTENs on is a connection it accepted. It counts only
+    // when the other end is outside: not another process of the same tree (a bundler talking to its
+    // own worker — e.g. node ↔ workerd — over loopback), and not the excluded peer (Owl Monitor's
+    // health probe, which keeps a keep-alive connection open). Both are recognised by the remote
+    // port being one of THEIR local ports. Outbound connections have an ephemeral local port that
+    // isn't a listener, so they never count.
+    int inbound = 0;
+    for (int i = 0; i < nmine; i++) {
+        if (mine[i].state != TCPS_ESTABLISHED || mine[i].lport <= 0) continue;
+        if (!dm_port_in(mine[i].lport, mine, nmine, 1)) continue;          // not accepted by us
+        if (dm_port_in(mine[i].fport, mine, nmine, 0)) continue;           // from inside the tree
+        if (dm_port_in(mine[i].fport, peer, npeer, 0)) continue;           // from the excluded peer
+        inbound++;
+    }
+    free(mine);
+    free(peer);
+    return inbound;
+}
+
 int dm_proc_listen_port(pid_t pid) {
     int bufSize = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
     if (bufSize <= 0) {

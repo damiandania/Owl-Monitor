@@ -80,6 +80,14 @@ int dm_proc_args(pid_t pid, char *buf, int size);
 // -2 when the process shows no environment at all: macOS hides it for Apple platform binaries.
 int dm_proc_env_value(pid_t pid, const char *key, char *buf, int size);
 
+/// How many TCP connections the process tree `tree` (`ntree` pids) has ACCEPTED from OUTSIDE and still
+/// holds open: established sockets on a port the tree listens on (a browser tab's page load or HMR
+/// websocket) whose other end isn't another process of the same tree (a bundler talking to its own
+/// worker) nor `exclude_peer` (pass Owl Monitor's pid: its health probe keeps a keep-alive
+/// connection open to every server; 0 excludes nothing). The tree's own outbound connections never
+/// count. Drives idle auto-stop — a server nobody is connected to is one nobody is using.
+int dm_tree_inbound_count(const pid_t *tree, int ntree, pid_t exclude_peer);
+
 /// The TCP port a process is LISTENing on (e.g. a dev server's port), or 0 if none.
 /// Used to identify a dev server started outside the app (e.g. "MiddleSpace :3001").
 int dm_proc_listen_port(pid_t pid);

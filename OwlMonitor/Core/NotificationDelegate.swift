@@ -14,7 +14,7 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         completionHandler([.banner, .sound, .list])
     }
 
-    /// Handle a tapped action (Restart / Open / Open logs) or the notification body itself.
+    /// Handle a tapped action (Restart / Open / Open logs / Stop Other Servers) or the body itself.
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
@@ -28,6 +28,8 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
             switch action {
             case "RESTART":
                 self.app?.restartFromNotification(projectID: pid)
+            case "STOP_OTHERS":
+                self.app?.stopOtherServersFromNotification(projectID: pid)
             case "OPEN_LOGS":
                 self.app?.focusFromNotification(projectID: pid, showLogs: true)
             case "OPEN", UNNotificationDefaultActionIdentifier:

@@ -77,6 +77,20 @@ guard let sData = try? JSONEncoder().encode(custom),
     print("FAIL model: AppSettings round-trip failed"); exit(1)
 }
 chk(sBack == custom, "settings: round-trip preserves all fields")
+chk(defs.shareHeapBudget && defs.idleStopMinutes == 0, "settings: shared heap on, idle stop off by default")
+
+// Proven heap floor: nil in older projects.json; a learned level that already climbed counts as proof.
+guard let noFloor = try? dec.decode(Project.self, from: oldJSON) else { print("FAIL model: floor decode"); exit(1) }
+chk(noFloor.heapFloorGB == nil && noFloor.devHeapFloorGB == Project.minHeapGB, "floor: absent → minHeapGB")
+var climbed = Project(name: "c", path: "/tmp/c", autoHeapGB: 6)
+chk(climbed.devHeapFloorGB == 6, "floor: learned level above the start (past OOM) is the floor")
+climbed.heapFloorGB = 4
+chk(climbed.devHeapFloorGB == 4, "floor: an explicit proven floor wins")
+chk(Project(name: "p", path: "/tmp/p", buildAutoHeapGB: 8).previewHeapFloorGB == 8
+    && Project(name: "p", path: "/tmp/p").previewHeapFloorGB == Project.minHeapGB, "floor: preview follows the build level")
+if let d = try? JSONEncoder().encode(climbed), let b = try? dec.decode(Project.self, from: d) {
+    chk(b.heapFloorGB == 4, "floor: round-trips through projects.json")
+} else { chk(false, "floor: round-trips through projects.json") }
 
 // Retired model IDs (settings saved by an older build) move to the current model of the same tier —
 // otherwise the picker shows nothing and every `claude --model` call fails.

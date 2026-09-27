@@ -114,6 +114,16 @@ extension AppState {
     /// launch starts there instead of replaying 4→6→8.
     func setAutoHeapGB(_ gb: Int, for id: Project.ID) { mutate(id) { $0.autoHeapGB = gb } }
 
+    /// The OOM autoscaler just relaunched `id` with a `gb` heap: persist it as the learned level AND as
+    /// the floor, so the shared-memory budget never squeezes the project back under a heap it already
+    /// ran out of memory at (see `launchHeapGB`).
+    func recordHeapEscalation(_ gb: Int, for id: Project.ID) {
+        mutate(id) {
+            $0.autoHeapGB = max($0.autoHeapGB, gb)
+            $0.heapFloorGB = max($0.heapFloorGB ?? 0, gb)
+        }
+    }
+
     /// Persist the build heap level learned by the OOM autoscaler (AUTO mode).
     func setBuildAutoHeapGB(_ gb: Int, for id: Project.ID) { mutate(id) { $0.buildAutoHeapGB = gb } }
 

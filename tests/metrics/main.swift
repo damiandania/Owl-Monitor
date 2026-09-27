@@ -89,6 +89,41 @@ let boundPort = Int(UInt16(bigEndian: bound.sin_port))
 chk("listener bound", bindOK && boundPort > 0, "port=\(boundPort)")
 chk("listen port detected", Int(dm_proc_listen_port(getpid())) == boundPort,
     "detected=\(dm_proc_listen_port(getpid())) expected=\(boundPort)")
+
+// 10) inbound-connection count (idle auto-stop): connections the tree ACCEPTED from outside. A real
+// client in another process (nc) holds one open against this process's listener.
+let me10 = [getpid()]
+func inbound(_ tree: [pid_t], excluding peer: pid_t = 0) -> Int {
+    Int(tree.withUnsafeBufferPointer { dm_tree_inbound_count($0.baseAddress, Int32($0.count), peer) })
+}
+chk("inbound: a bare listener has no connections", inbound(me10) == 0, "count=\(inbound(me10))")
+let nc = Process()
+nc.executableURL = URL(fileURLWithPath: "/usr/bin/nc")
+nc.arguments = ["127.0.0.1", String(boundPort)]
+let ncIn = Pipe(); nc.standardInput = ncIn          // held open: nc keeps the connection up
+nc.standardOutput = FileHandle.nullDevice
+try? nc.run()
+let accepted = accept(sock, nil, nil)
+chk("inbound: external client connected", accepted >= 0)
+chk("inbound: a connection from another process counts", inbound(me10) == 1, "count=\(inbound(me10))")
+chk("inbound: …but not from the excluded peer (Owl Monitor's own probe)",
+    inbound(me10, excluding: nc.processIdentifier) == 0, "count=\(inbound(me10, excluding: nc.processIdentifier))")
+chk("inbound: …nor from a process of the same tree (bundler ↔ its worker)",
+    inbound(me10 + [nc.processIdentifier]) == 0, "count=\(inbound(me10 + [nc.processIdentifier]))")
+// This process's OWN outbound connection — to the listener, from inside the tree — never counts.
+let client = socket(AF_INET, SOCK_STREAM, 0)
+var peer = sin
+peer.sin_port = in_port_t(UInt16(boundPort).bigEndian)
+_ = withUnsafePointer(to: &peer) { p in
+    p.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(client, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+}
+let acceptedSelf = accept(sock, nil, nil)
+chk("inbound: the tree's own loopback connection doesn't count", inbound(me10) == 1, "count=\(inbound(me10))")
+close(acceptedSelf); close(client)
+nc.terminate(); nc.waitUntilExit()
+close(accepted)
+usleep(100_000)
+chk("inbound: back to zero once the client leaves", inbound(me10) == 0, "count=\(inbound(me10))")
 close(sock)
 
 print(fail == 0 ? "ALL METRICS TESTS PASSED" : "\(fail) METRICS TEST(S) FAILED")
