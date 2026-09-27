@@ -29,15 +29,6 @@ struct ProjectSidebar: View {
             // Last 5 notifications as a "Recent" section on the same card surface as Projects.
             NotificationsFeedView()
         }
-        // Brand lockup pinned above the list rather than placed inside it, so it stays put while the
-        // projects scroll and can't be selected as a row.
-        .safeAreaInset(edge: .top) {
-            BrandMark(size: 24)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14)
-                .padding(.top, 10)
-                .padding(.bottom, 8)
-        }
         .overlay {
             if app.projects.isEmpty {
                 ContentUnavailableView(
@@ -48,6 +39,15 @@ struct ProjectSidebar: View {
             }
         }
         .toolbar {
+            // .navigation sits past the sidebar toggle, which puts the owl at the head of the detail
+            // pane's toolbar — directly left of the window title, so the two read as one lockup. Hence
+            // no wordmark: the title beside it already says "Owl Monitor".
+            ToolbarItem(placement: .navigation) {
+                BrandMark(size: 18, showsWordmark: false)
+            }
+            // Without this the owl gets the standard toolbar glass capsule behind it and reads as a
+            // button you can click. It's a brand mark, not a control.
+            .sharedBackgroundVisibility(.hidden)
             ToolbarItem {
                 Button { importing = true } label: {
                     Label("Add Project", systemImage: "plus")

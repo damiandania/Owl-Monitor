@@ -11,7 +11,7 @@ enum QuotaStatus: Equatable {
     case unavailable    // ran but returned no readable data (contention / unknown) — worth retrying
 }
 
-/// Claude subscription usage for the notch HUD / mascot. `claude -p "/usage"` is the one reliable
+/// Claude subscription usage for the notch HUD. `claude -p "/usage"` is the one reliable
 /// local source: the statusline only carries `rate_limits` while an interactive session happens to be
 /// rendering it (not guaranteed, and absent in IDE/SDK contexts). We run it off-main on a slow cadence
 /// and parse the two headline percentages — the rolling 5-hour window ("Current session") and the

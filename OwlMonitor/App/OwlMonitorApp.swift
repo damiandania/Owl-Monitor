@@ -58,7 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// build the controls menu. Guarded so a window reopen doesn't spawn a second HUD.
     func attach(appState: AppState) {
         guard quotaHUD == nil else { return }
-        // One continuous notch bar: animated mascot (left) + notch + quota readout (right).
+        // One continuous notch bar: project-status icons (left) + notch + quota readout (right).
         quotaHUD = QuotaHUDController(claudeQuota: claudeQuota, gptQuota: gptQuota, appState: appState)
     }
 }

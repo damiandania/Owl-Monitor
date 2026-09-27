@@ -74,7 +74,7 @@ Reclaims memory **before** the machine stalls — both when it's detected as *st
 ### 🖥️ Global terminal &amp; notch bar
 - **Global terminal** — one resizable panel at the bottom of the detail pane with **one tab per running server and per build, across all projects** (*icon + project name + ✕*). **Claude Code's shells and monitors get tabs too** — each tab shows the command/script it runs and a **Stop** button. Each log pane supports **native click-drag selection across many lines** and a one-click **Copy** button (with a copied ✓ confirmation) that puts the whole log on the clipboard; a search field filters it live.
 - **Global Activity** — the meters and process list always reflect the whole machine, not just the selected project.
-- **Notch bar** — a single black strip that extends the notch's bezel: an animated, all-vector Claude **cat mascot** on the left that mirrors what the machine is doing (hammering while a build runs, a rocket on the pad while a server boots, red-X eyes on a failure, a warning face under pressure, a hard-hat salute when a worker starts, cat vignettes when idle), and the live **Claude quota** — 5-hour and 7-day usage — on the right. Hovering it opens the controls menu: every **online server** (status/uptime + Stop/Restart), every **build** in progress, any **external** servers, a Launch button and a CPU/memory snapshot — without opening the window. (macOS hides menu-bar icons *behind* the notch, so the status glyph moved here where it's always visible, even in fullscreen.)
+- **Notch bar** — a single black strip that extends the notch's bezel: each active project appears on the left as its favicon (or framework icon) inside a status ring — **green** online, **orange** pulsing while starting, **blue** pulsing during a build, **red** stopped/failed, **yellow** when degraded — plus a pressure warning when the machine needs attention. The live **Claude quota** — 5-hour and 7-day usage — stays on the right. Hovering it opens the controls menu: every **online server** (status/uptime + Stop/Restart), every **build** in progress, any **external** servers, a Launch button and a CPU/memory snapshot — without opening the window. (macOS hides menu-bar icons *behind* the notch, so the status glyph moved here where it's always visible, even in fullscreen.)
 - **Appearance** — app-wide **Theme** (System / Light / Dark) and a separate **Terminal** theme for the log panes.
 
 ### ⌨️ CLI + central hub
@@ -199,12 +199,13 @@ OwlMonitor/
   Sys/        spawn.c (posix_spawn SETSID + CLOEXEC), metrics.c (libproc/mach),
               ipc.c, dm_exc.m (ObjC exception shim) + bridging header
   Views/      RootSplitView, DashboardView, GlobalTerminalView, MenuBarView,
-              QuotaHUD + ClaudeMascot (the notch bar), ActivityView,
+              QuotaHUD (the notch bar), ActivityView,
               ProcessTableView, BrandMark, settings + Claude sheets
   Resources/  Assets.xcassets (AppIcon + OwlLogo + skull + github), Info.plist
 owl-monitor/  CLI target (IPC client, robust arg parsing in ArgParse.swift)
-brand/        The artwork: app-icon.png (the icon), favicon.svg (the in-app OwlLogo badge),
-              Logo-light/dark.png (the flat mark, for docs)
+brand/        The artwork: app-icon.png (the icon), mini-logo-light/dark.svg (the in-app
+              OwlLogo, one per appearance), Logo-light/dark.png (the full mark, for docs),
+              favicon.svg (the square badge)
 ```
 
 Every brand asset is designed artwork exported into `brand/`, and the app reads it from there — nothing
@@ -214,8 +215,9 @@ is drawn in code. After re-exporting `brand/app-icon.png`, refresh every size in
 swift tools/make-icon.swift
 ```
 
-`brand/favicon.svg` is the badge shown in the sidebar and Settings; the asset catalog keeps it as a
-vector, so it stays sharp at any size.
+`brand/mini-logo-light.svg` and `-dark.svg` are the mark shown in the sidebar and Settings. The asset
+catalog holds both under `OwlLogo` and picks one per system appearance, keeping them as vectors so they
+stay sharp at any size.
 
 ---
 

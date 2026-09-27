@@ -2,7 +2,6 @@ import SwiftUI
 import AppKit
 
 extension Color {
-    /// Claude's primary "clay" coral — the brand accent used for the quota numbers.
     static let claudeCoral = Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255)
 }
 
@@ -21,38 +20,45 @@ extension NSScreen {
 
 enum QuotaSource { case claude, gpt }
 
+/// The current ChatGPT menu-bar glyph, supplied by the installed ChatGPT app. GPT quota probing
+/// already depends on this app's bundled Codex CLI, so this keeps the HUD aligned with its live icon.
+private enum ChatGPTBrand {
+    static let menuBarGlyph = NSImage(contentsOfFile: "/Applications/ChatGPT.app/Contents/Resources/chatgptTemplate.png")
+        ?? NSImage(systemSymbolName: "sparkles", accessibilityDescription: "ChatGPT")!
+}
+
 /// The always-visible readout on the RIGHT side of the notch bar. Clicking it alternates between
 /// Claude's 5-hour / 7-day remaining quota and the signed-in GPT (Codex) remaining quota. The black background itself is
-/// drawn by `QuotaHUDController`'s container (one continuous shape from the mascot, across the notch,
-/// to here), not by this view.
+/// drawn by `QuotaHUDController`'s container, which continues seamlessly beneath the physical notch.
 struct QuotaHUDView: View {
     var claudeQuota: ClaudeQuotaMonitor
     var gptQuota: CodexQuotaMonitor
     var source: QuotaSource
     var appState: AppState
     var barHeight: CGFloat
-    var onZoneHover: (Bool) -> Void
     var onContentChange: () -> Void
     var onToggle: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 7) {
             switch source {
             case .claude:
+                Image("ClaudeLogo").renderingMode(.template).resizable().scaledToFit()
+                    .frame(width: 13, height: 13).foregroundStyle(Color.claudeCoral)
                 if claudeQuota.status == .ok {
-                    let numberColor: Color = claudeQuota.isStale ? .white.opacity(0.5) : .claudeCoral
-                    if let five = claudeQuota.fiveHour { claudeMetric("clock", five, numberColor) }
-                    if let seven = claudeQuota.sevenDay { claudeMetric("calendar", seven, numberColor) }
+                    let numberColor: Color = claudeQuota.isStale ? .claudeCoral.opacity(0.5) : .claudeCoral
+                    if let five = claudeQuota.fiveHour { claudeMetric(five, numberColor) }
+                    if let seven = claudeQuota.sevenDay { claudeMetric(seven, numberColor) }
                 } else {
                     statusBadge(claudeQuota.status, cli: "Claude",
                                 reauth: "run `claude` in a terminal and sign in")
                 }
             case .gpt:
-                Image("CodexLogo").renderingMode(.template).resizable().scaledToFit()
-                    .frame(width: 13, height: 13).foregroundStyle(.white)
+                Image(nsImage: ChatGPTBrand.menuBarGlyph)
+                    .resizable().interpolation(.high).scaledToFit()
+                    .frame(width: 13, height: 13)
                 if gptQuota.status == .ok {
-                    if let primary = gptQuota.primary { gptMetric(primary) }
-                    if let secondary = gptQuota.secondary { gptMetric(secondary) }
+                    if let window = gptQuota.primary ?? gptQuota.secondary { gptMetric(window) }
                     if !gptQuota.hasData { Text("—").foregroundStyle(.white.opacity(0.6)) }
                 } else {
                     statusBadge(gptQuota.status, cli: "Codex", reauth: "run `codex login` in a terminal")
@@ -62,10 +68,8 @@ struct QuotaHUDView: View {
         .font(.system(size: 12, weight: .semibold)).monospacedDigit()
         .imageScale(.medium)
         .padding(.horizontal, 10)
-        .frame(height: barHeight)
-        .fixedSize(horizontal: true, vertical: false)
+        .frame(maxWidth: .infinity, minHeight: barHeight)
         .contentShape(Rectangle())
-        .onHover { onZoneHover($0) }
         .onTapGesture { onToggle() }
         .onChange(of: claudeQuota.fiveHour == nil) { _, _ in onContentChange() }
         .onChange(of: claudeQuota.sevenDay == nil) { _, _ in onContentChange() }
@@ -98,70 +102,206 @@ struct QuotaHUDView: View {
         }
     }
 
-    private func claudeMetric(_ symbol: String, _ usedPercent: Int, _ color: Color) -> some View {
-        HStack(spacing: 3) {
-            Image(systemName: symbol)
-            Text("\(remainingPercent(usedPercent))%")
-        }
+    private func claudeMetric(_ usedPercent: Int, _ color: Color) -> some View {
+        Text("\(remainingPercent(usedPercent))%")
         .foregroundStyle(color)
         .help(claudeQuota.isStale
               ? "Claude quota — no recent update; run a Claude session to refresh"
-              : "Claude quota remaining · clock = 5-hour window · calendar = 7-day window")
+              : "Claude quota remaining · first value = 5-hour window · second value = 7-day window")
     }
 
     private func gptMetric(_ window: CodexQuotaMonitor.Window) -> some View {
-        HStack(spacing: 3) {
-            Image(systemName: (window.durationMinutes ?? 0) <= 360 ? "clock" : "calendar")
-            Text("\(remainingPercent(window.usedPercent))%")
-        }
+        Text("\(remainingPercent(window.usedPercent))%")
         .foregroundStyle(gptQuota.isStale ? .white.opacity(0.5) : .white)
         .help(gptQuota.isStale
               ? "GPT quota — no recent update; make sure Codex is installed and signed in"
-              : "GPT quota remaining · \(windowDescription(window))")
+              : "GPT quota remaining")
     }
 
     private func remainingPercent(_ usedPercent: Int) -> Int {
         max(0, min(100, 100 - usedPercent))
     }
 
-    private func windowDescription(_ window: CodexQuotaMonitor.Window) -> String {
-        guard let minutes = window.durationMinutes else { return "usage limit" }
-        if minutes < 60 { return "\(minutes)-minute window" }
-        if minutes < 24 * 60 { return "\(minutes / 60)-hour window" }
-        return "\(minutes / (24 * 60))-day window"
+}
+
+private enum NotchStatus: Equatable {
+    case online, launching, building, stopped, warning
+
+    var color: Color {
+        switch self {
+        case .online: .green
+        case .launching: .orange
+        case .building: .blue
+        case .stopped: .red
+        case .warning: .yellow
+        }
+    }
+
+    var pulses: Bool { self == .launching || self == .building }
+
+    var title: String {
+        switch self {
+        case .online: "Online"
+        case .launching: "Starting"
+        case .building: "Building"
+        case .stopped: "Stopped or failed"
+        case .warning: "Needs attention"
+        }
     }
 }
 
-/// A tiny AppKit view that reports hover (the mascot half of the bar is AppKit, so SwiftUI's
-/// `.onHover` can't cover it) — hovering the mascot opens the same controls menu as the readout.
-private final class HoverTrackingView: NSView {
-    var onHover: ((Bool) -> Void)?
-    var onClick: (() -> Void)?
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways],
-                                       owner: self, userInfo: nil))
-    }
-    override func mouseEntered(with event: NSEvent) { onHover?(true) }
-    override func mouseExited(with event: NSEvent) { onHover?(false) }
-    // Click the cat to pet it (fires the heart burst). A non-activating panel still delivers the
-    // click without stealing focus from whatever you're working in.
-    override func mouseDown(with event: NSEvent) { onClick?() }
+private struct NotchStatusItem: Identifiable {
+    let project: Project
+    let status: NotchStatus
+    let detail: String
+
+    var id: Project.ID { project.id }
 }
 
-/// Owns the notch bar: ONE borderless panel spanning mascot strip + notch + quota readout, drawn as a
-/// single continuous black shape (the physical notch sits over its middle, black on black — so the
-/// whole thing reads as one wide notch, never two floating pieces). Also owns the controls popover
-/// opened on hover, and drives the mascot's mood from app state.
+/// Status icons on the left of the notch. Each project appears only once, using the most important
+/// current state: build (blue) > online (green) > launching (orange) > warning > stopped (red).
+/// A project remains green when any
+/// one of its managed processes is alive, even if a separate preview/build was stopped earlier.
+private struct NotchStatusStrip: View {
+    let appState: AppState
+    let barHeight: CGFloat
+    let onZoneHover: (Bool) -> Void
+
+    private static let maximumVisibleProjects = 8
+    private static let minimumWidth: CGFloat = 130
+    private static let iconSlotWidth: CGFloat = 20
+
+    var body: some View {
+        let allItems = Self.items(for: appState)
+        let visibleItems = Array(allItems.prefix(Self.maximumVisibleProjects))
+        let hiddenCount = allItems.count - visibleItems.count
+
+        HStack(spacing: 4) {
+            if appState.systemUnderPressure { pressureIcon }
+            ForEach(visibleItems) { item in
+                NotchProjectStatusIcon(item: item)
+            }
+            if hiddenCount > 0 {
+                Text("+\(hiddenCount)")
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.72))
+                    .frame(minWidth: 16)
+                    .frame(height: 16)
+                    .help("\(hiddenCount) more monitored project\(hiddenCount == 1 ? "" : "s")")
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+        .padding(.horizontal, 9)
+        .contentShape(Rectangle())
+        .onHover { onZoneHover($0) }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Project status")
+    }
+
+    private var pressureIcon: some View {
+        Image(systemName: "exclamationmark.triangle.fill")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(.yellow)
+            .frame(width: 16, height: 16)
+            .help("Machine under pressure")
+            .accessibilityLabel("Machine under pressure")
+    }
+
+    static func preferredWidth(for appState: AppState) -> CGFloat {
+        let projectCount = min(items(for: appState).count, maximumVisibleProjects)
+        let overflow = items(for: appState).count > maximumVisibleProjects ? 1 : 0
+        let count = projectCount + overflow + (appState.systemUnderPressure ? 1 : 0)
+        // The left stage always begins as wide as the quota stage, then expands only when the
+        // project icons no longer fit comfortably at their compact size.
+        return max(minimumWidth, CGFloat(count) * iconSlotWidth + CGFloat(max(0, count - 1)) * 4 + 18)
+    }
+
+    static func items(for appState: AppState) -> [NotchStatusItem] {
+        appState.projects.compactMap { project in
+            guard let status = status(for: project, appState: appState) else { return nil }
+            return NotchStatusItem(project: project, status: status.status, detail: status.detail)
+        }
+    }
+
+    private static func status(for project: Project, appState: AppState) -> (status: NotchStatus, detail: String)? {
+        let sessions = [appState.sessions[project.id], appState.previews[project.id]].compactMap { $0 }
+        let hasServerFailure = sessions.contains { session in
+            if case .failed = session.state { return true }
+            if case .stopped = session.state { return true }
+            return false
+        }
+        let hasWarning = sessions.contains { session in
+            if case .degraded = session.state { return true }
+            return false
+        }
+        let isLaunching = sessions.contains { session in
+            if case .launching = session.state { return true }
+            if case .recycling = session.state { return true }
+            return false
+        }
+        let isOnline = sessions.contains { session in
+            if case .running = session.state { return true }
+            return false
+        }
+        let worker = appState.workers[project.id]
+        let build = appState.builds[project.id]
+
+        if build?.isRunning == true { return (.building, "Build in progress") }
+        if isOnline || worker?.isRunning == true { return (.online, "Server is online") }
+        if isLaunching { return (.launching, "Server is starting") }
+        if hasWarning { return (.warning, "Server health needs attention") }
+        if hasServerFailure || worker?.didCrash == true || (build?.result ?? 0) != 0 {
+            return (.stopped, "Stopped or failed")
+        }
+        // A manually stopped worker has an exit code but is not a crash; it is still useful to surface it.
+        if worker?.lastExitCode != nil { return (.stopped, "Worker stopped") }
+        return nil
+    }
+}
+
+private struct NotchProjectStatusIcon: View {
+    let item: NotchStatusItem
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isPulsing = false
+
+    var body: some View {
+        ZStack {
+            if item.status.pulses && !reduceMotion {
+                Circle()
+                    .stroke(item.status.color, lineWidth: 1.5)
+                    .scaleEffect(isPulsing ? 1.65 : 1)
+                    .opacity(isPulsing ? 0 : 0.72)
+                    .animation(.easeOut(duration: item.status == .building ? 0.72 : 0.95)
+                        .repeatForever(autoreverses: true), value: isPulsing)
+            }
+            Circle().fill(.black)
+            Circle().stroke(item.status.color, lineWidth: 1.75)
+            ProjectIconView(project: item.project, size: 10)
+                .clipShape(Circle())
+        }
+        .frame(width: 16, height: 16)
+        .help("\(item.project.name): \(item.detail)")
+        .accessibilityLabel("\(item.project.name): \(item.detail)")
+        .onAppear(perform: syncPulse)
+        .onChange(of: item.status) { _, _ in syncPulse() }
+        .onChange(of: reduceMotion) { _, _ in syncPulse() }
+    }
+
+    private func syncPulse() {
+        isPulsing = item.status.pulses && !reduceMotion
+    }
+}
+
+/// Owns the notch bar: ONE borderless panel spanning the project-state strip, notch, and quota
+/// readout. The physical notch covers its middle, making the overlay read as one continuous shape.
+/// Hovering the project-state end opens the controls popover; the quota end is click-only.
 @MainActor
 final class QuotaHUDController {
     private let panel: NSPanel
     /// The one black strip: rounded at BOTH outer-bottom corners, square across the notch.
     private let container: NSView
     private let barMask = CAShapeLayer()
-    private let mascotHost: HoverTrackingView
-    private let mascot = ClaudeMascot()
+    private let statusHosting: NSHostingView<NotchStatusStrip>
     private let hosting: NSHostingView<QuotaHUDView>
     private let popover: NSPopover
     private let barHeight: CGFloat
@@ -173,25 +313,10 @@ final class QuotaHUDController {
     private var hudHovered = false
     private var menuHovered = false
     private var closeWork: DispatchWorkItem?
-    private var moodTimer: Timer?
-
-    /// Both ends of the bar use the SAME fixed width: the mascot's stage on the left mirrors the
-    /// readout on the right, so the bar is symmetric around the notch and never resizes as the quota
-    /// numbers appear/disappear (the readout content just centres in its half). Slimmer now that the
-    /// readout is just the two quota numbers in a smaller font (the status icon is gone).
-    private static let sideWidth: CGFloat = 130
-
-    /// Edge-detection state for the event animations: the previous tick's snapshot of what was
-    /// running/launching, so transitions (started, finished, failed) can fire transient animations.
-    private var runningBuildIDs: Set<Project.ID> = []
-    private var runningWorkerIDs: Set<Project.ID> = []
-    private var launchingServerIDs: Set<Project.ID> = []
-    private var runningServerIDs: Set<Project.ID> = []
-    private var wasKeepingAwake = false
-    private var wasRed = false
-    /// The transient event animation currently showing, and until when.
-    private var transientMood: ClaudeMascot.Mood?
-    private var transientUntil = Date.distantPast
+    private var statusTimer: Timer?
+    private var statusWidth: CGFloat = 130
+    private var didInstallStatusStrip = false
+    private static let quotaWidth: CGFloat = 130
 
     init(claudeQuota: ClaudeQuotaMonitor, gptQuota: CodexQuotaMonitor, appState: AppState) {
         self.appState = appState
@@ -205,18 +330,17 @@ final class QuotaHUDController {
         hosting = NSHostingView(rootView: QuotaHUDView(claudeQuota: claudeQuota, gptQuota: gptQuota,
                                                        source: .claude, appState: appState,
                                                        barHeight: barHeight,
-                                                       onZoneHover: { _ in }, onContentChange: {}, onToggle: {}))
+                                                       onContentChange: {}, onToggle: {}))
+        statusHosting = NSHostingView(rootView: NotchStatusStrip(appState: appState, barHeight: barHeight,
+                                                                 onZoneHover: { _ in }))
 
         container = NSView()
         container.wantsLayer = true
         container.layer?.backgroundColor = NSColor.black.cgColor
-        container.layer?.masksToBounds = true   // clip the mascot inside the bar
+        container.layer?.masksToBounds = true
         container.layer?.mask = barMask         // custom notch silhouette (concave top, convex bottom)
 
-        mascotHost = HoverTrackingView()
-        mascotHost.wantsLayer = true
-        mascotHost.layer?.addSublayer(mascot.root)
-        container.addSubview(mascotHost)
+        container.addSubview(statusHosting)
         container.addSubview(hosting)
 
         panel = NSPanel(contentRect: .zero,
@@ -243,15 +367,11 @@ final class QuotaHUDController {
                 .onHover { [weak self] in self?.menuHover($0) })
 
         updateQuotaView()
-        mascotHost.onHover = { [weak self] in self?.zoneHover($0) }
-        mascotHost.onClick = { [weak self] in self?.love() }
-
-        updateMood()
-        // State (builds, health, keep-awake, quota) isn't one cheap stream to subscribe to, so poll —
-        // a ~1s lag on a state that lasts seconds/minutes is imperceptible, and switching the mascot's
-        // mood only reinstalls a handful of animations.
-        moodTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.updateMood() }
+        updateStatusStrip()
+        // The SwiftUI strip observes individual state changes. This light poll only adjusts its AppKit
+        // host width as projects appear/disappear, so icons can grow out from the notch without jumps.
+        statusTimer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.updateStatusStrip() }
         }
 
         NotificationCenter.default.addObserver(
@@ -264,7 +384,6 @@ final class QuotaHUDController {
     private func updateQuotaView() {
         hosting.rootView = QuotaHUDView(claudeQuota: claudeQuota, gptQuota: gptQuota,
                                         source: quotaSource, appState: appState, barHeight: barHeight,
-                                        onZoneHover: { [weak self] in self?.zoneHover($0) },
                                         onContentChange: { [weak self] in
                                             DispatchQueue.main.async { self?.reposition() }
                                         }, onToggle: { [weak self] in self?.toggleQuotaSource() })
@@ -276,108 +395,16 @@ final class QuotaHUDController {
         updateQuotaView()
     }
 
-    // MARK: - Mascot mood
-
-    /// Event-driven mascot: most of the time the cat just lives its life (idle vignettes). App
-    /// activity fires short TRANSIENT animations (3 s each):
-    ///   failed      — something failed (health went red / a build exited non-zero): red X eyes
-    ///   completed   — a launching server reached running: the rocket lifts off + check eyes
-    ///   exploded    — a server died mid-launch: the rocket explodes + red X eyes
-    ///   celebrating — a build finished OK: check eyes, hops + confetti
-    ///   gearedUp    — a background worker just started: hard hat drops on + determined nod
-    ///   caffeinated — keep-awake switched on: a steaming coffee, a couple of sips
-    /// Four CONTINUOUS states: while a server is LAUNCHING the rocket vibrates on the pad; while a
-    /// build runs the cat hammers away; while a production PREVIEW serves it watches its little
-    /// screen; and when the machine is under pressure the warning-eyes animation outranks
-    /// EVERYTHING (explicit policy).
-    private func updateMood() {
-        let now = Date()
-
-        // Builds: one leaving the running set finished — code 0 celebrates, anything else goes red.
-        let buildsRunning = Set(appState.builds.filter { $0.value.isRunning }.map(\.key))
-        for id in runningBuildIDs.subtracting(buildsRunning) {
-            fire(appState.builds[id]?.result == 0 ? .celebrating : .failed, at: now)
+    private func updateStatusStrip() {
+        if !didInstallStatusStrip {
+            statusHosting.rootView = NotchStatusStrip(appState: appState, barHeight: barHeight,
+                                                       onZoneHover: { [weak self] in self?.zoneHover($0) })
+            didInstallStatusStrip = true
         }
-        runningBuildIDs = buildsRunning
-
-        // Workers: a NEW one starting gets the 3-second hard-hat salute; while it runs, nothing.
-        let workersNow = Set(appState.workers.filter { $0.value.isRunning }.map(\.key))
-        if !workersNow.subtracting(runningWorkerIDs).isEmpty { fire(.gearedUp, at: now) }
-        runningWorkerIDs = workersNow
-
-        // Keep-awake toggled ON → a 3-second coffee break.
-        let keepingAwake = appState.sleepGuard.isActive
-        if keepingAwake && !wasKeepingAwake { fire(.caffeinated, at: now) }
-        wasKeepingAwake = keepingAwake
-
-        // Servers (dev sessions + previews). Launching is CONTINUOUS (the rocket loop plays for as
-        // long as a server is coming up — that can be well past 3 s); reaching running fires the
-        // 3-second green-check event.
-        var launchingNow = Set<Project.ID>(), runningNow = Set<Project.ID>()
-        for sessions in [appState.sessions, appState.previews] {
-            for (id, s) in sessions {
-                switch s.state {
-                case .launching, .recycling: launchingNow.insert(id)
-                case .running:               runningNow.insert(id)
-                default:                     break
-                }
-            }
-        }
-        // Anything going red (a session failing, a worker crashing…). Generic — the specific
-        // launch outcomes below may override it on the same tick with a better story.
-        let red = appState.serversHealth == .red
-        if red && !wasRed { fire(.failed, at: now) }
-        wasRed = red
-
-        // Where did each launching server END UP? Reaching running lifts the rocket off
-        // (`completed`); dying mid-launch blows it up (`exploded`). Checked last so the launch
-        // outcome wins the event slot over the generic red flash.
-        for id in launchingServerIDs.subtracting(launchingNow) {
-            if runningNow.contains(id) {
-                fire(.completed, at: now)
-            } else {
-                switch appState.sessions[id]?.state ?? appState.previews[id]?.state {
-                case .failed?, .stopped?, nil: fire(.exploded, at: now)
-                default: break                 // still alive in some other state — no story
-                }
-            }
-        }
-        launchingServerIDs = launchingNow
-        runningServerIDs = runningNow
-
-        let mood: ClaudeMascot.Mood
-        if appState.systemUnderPressure {
-            mood = .pressured                                    // outranks everything
-        } else if let transient = transientMood, now < transientUntil {
-            mood = transient
-        } else if !launchingNow.isEmpty {
-            mood = .launching                                    // continuous while a server boots
-        } else if !buildsRunning.isEmpty {
-            mood = .working
-        } else if appState.previews.values.contains(where: {
-            if case .running = $0.state { return true } else { return false }
-        }) {
-            mood = .previewing                                   // production preview serving
-        } else {
-            mood = .idle
-        }
-        mascot.set(mood)
-    }
-
-    /// Show a transient event animation for 3 seconds (replacing whatever event was showing).
-    private func fire(_ mood: ClaudeMascot.Mood, at now: Date) {
-        transientMood = mood
-        transientUntil = now.addingTimeInterval(3)
-    }
-
-    /// You clicked the cat: reward it with a 3-second heart burst. `poke` forces the animation to
-    /// (re)start even on a rapid repeat click, and the transient window keeps it up until the next
-    /// real event (or pressure) reclaims the slot on the poll tick.
-    private func love() {
-        let now = Date()
-        transientMood = .loved
-        transientUntil = now.addingTimeInterval(3)
-        mascot.poke(.loved)
+        let updatedWidth = NotchStatusStrip.preferredWidth(for: appState)
+        guard abs(updatedWidth - statusWidth) > 0.5 else { return }
+        statusWidth = updatedWidth
+        reposition()
     }
 
     // MARK: - Hover / popover
@@ -395,7 +422,7 @@ final class QuotaHUDController {
     private func openMenu() {
         closeWork?.cancel()
         guard !popover.isShown else { return }
-        popover.show(relativeTo: hosting.bounds, of: hosting, preferredEdge: .minY)
+        popover.show(relativeTo: statusHosting.bounds, of: statusHosting, preferredEdge: .minY)
     }
 
     private func scheduleClose() {
@@ -410,26 +437,26 @@ final class QuotaHUDController {
 
     // MARK: - Geometry
 
-    /// One frame for the whole bar: a fixed-width mascot stage hugging the notch's left side, the
-    /// notch, and an equally wide readout on the right. The physical notch covers the middle of the
-    /// black container, so on screen — and in screenshots — it's one continuous, symmetric shape.
-    /// Falls back to a compact mascot+readout bar in the top-right corner on a display without a notch.
+    /// One frame for the whole bar: the project-state strip hugs the notch's left side and quota
+    /// readout the right. The physical notch covers the middle of the black container, so it remains
+    /// one continuous shape. Falls back to a compact bar in the top-right corner without a notch.
     @objc private func reposition() {
         guard let screen = NSScreen.notched else { return }
-        let side = Self.sideWidth
+        let leftWidth = statusWidth
+        let rightWidth = Self.quotaWidth
         let frame: NSRect
         if let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea {
             let h = left.height
-            frame = NSRect(x: left.maxX - side, y: left.minY,
-                           width: side + (right.minX - left.maxX) + side, height: h)
+            frame = NSRect(x: left.maxX - leftWidth, y: left.minY,
+                           width: leftWidth + (right.minX - left.maxX) + rightWidth, height: h)
         } else if screen.hasNotch {
             // Notch display mid-transition: the auxiliary areas momentarily read nil. Keep the last
             // good frame instead of jumping to a corner — the bar must stay static behind the camera.
             return
         } else {
             let h = Self.menuBarHeight(on: screen)
-            frame = NSRect(x: screen.frame.maxX - 2 * side - 8, y: screen.frame.maxY - h,
-                           width: 2 * side, height: h)
+            frame = NSRect(x: screen.frame.maxX - leftWidth - rightWidth - 8, y: screen.frame.maxY - h,
+                           width: leftWidth + rightWidth, height: h)
         }
         panel.setFrame(frame, display: true)
 
@@ -439,9 +466,8 @@ final class QuotaHUDController {
         barMask.frame = CGRect(origin: .zero, size: frame.size)
         barMask.path = Self.notchPath(width: frame.width, height: h,
                                       topRadius: min(h * 0.28, 12), bottomRadius: h * 0.32)
-        mascotHost.frame = NSRect(x: 0, y: 0, width: side, height: h)              // left stage
-        hosting.frame = NSRect(x: frame.width - side, y: 0, width: side, height: h) // right readout
-        mascot.layout(width: side, height: h, backing: screen.backingScaleFactor)
+        statusHosting.frame = NSRect(x: 0, y: 0, width: leftWidth, height: h)
+        hosting.frame = NSRect(x: frame.width - rightWidth, y: 0, width: rightWidth, height: h)
         CATransaction.commit()
     }
 
