@@ -27,6 +27,11 @@ struct ProjectIconView: View {
         "public/favicon.svg", "public/apple-touch-icon.png",
         "app/favicon.ico", "src/favicon.ico", "static/favicon.ico",
         "assets/favicon.ico", "favicon.ico", "favicon.png",
+        // Next.js App Router file conventions: `icon` / `apple-icon` (any of these extensions) in
+        // the app directory ARE the favicon — there's no `favicon.*` file at all.
+        "app/icon.svg", "app/icon.png", "app/icon.ico", "app/icon.jpg", "app/apple-icon.png",
+        "src/app/icon.svg", "src/app/icon.png", "src/app/icon.ico", "src/app/icon.jpg",
+        "src/app/apple-icon.png", "src/app/favicon.ico",
     ]
 
     static func favicon(for projectPath: String) -> NSImage? {
