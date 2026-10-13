@@ -87,7 +87,7 @@ final class ClaudeQuotaMonitor {
         }
     }
 
-    private enum ProbeResult { case data(five: Int?, seven: Int?), failure(QuotaStatus) }
+    enum ProbeResult: Equatable { case data(five: Int?, seven: Int?), failure(QuotaStatus) }
 
     /// Primary probe (`claude -p '/usage'`, up to 3 attempts) for the numbers, plus a one-shot
     /// `claude usage` diagnostic to explain a persistent hollow response. `-p '/usage'` SWALLOWS the
@@ -124,13 +124,22 @@ final class ClaudeQuotaMonitor {
     }
 
     /// Turn one probe's stdout/stderr/exit code into a result: parsed numbers, or a classified
-    /// failure. Ordering matters — a missing CLI and an auth error are checked before "hollow".
-    nonisolated private static func classify(out: String, err: String, code: Int32) -> ProbeResult {
-        let blob = (out + "\n" + err).lowercased()
-        if code == 127 || blob.contains("command not found") { return .failure(.notInstalled) }
+    /// failure. Numbers win over everything: `claude` also runs the user's Claude Code hooks, and one
+    /// that fails (`sh: node: command not found` — the app's PATH has no node) prints into the same
+    /// output while the usage table is still there. Matching "command not found" first showed the
+    /// "CLI not installed" `?` badge next to a perfectly good reading.
+    nonisolated static func classify(out: String, err: String, code: Int32) -> ProbeResult {
         let five = percent(after: "Current session:", in: out)
         let seven = percent(after: "Current week (all models):", in: out)
         if five != nil || seven != nil { return .data(five: five, seven: seven) }
+        let blob = (out + "\n" + err).lowercased()
+        // Missing means `claude` itself: the shell's exit 127, or a "not found" line naming claude —
+        // never some other program's (a hook's `node`).
+        // Both shell spellings, anchored on the program name: zsh says `command not found: claude`,
+        // sh/bash `claude: command not found`. (A bare "claude" substring would match a hook's own
+        // `${CLAUDE_PLUGIN_ROOT}` text.)
+        let claudeMissing = blob.contains("command not found: claude") || blob.contains("claude: command not found")
+        if code == 127 || claudeMissing { return .failure(.notInstalled) }
         if looksSignedOut(blob) { return .failure(.signedOut) }
         return .failure(.unavailable)   // ran, exited, but produced nothing usable
     }

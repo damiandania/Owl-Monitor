@@ -455,7 +455,7 @@ final class QuotaHUDController {
 
     /// One frame for the whole bar: the project-state strip hugs the notch's left side and quota
     /// readout the right. The physical notch covers the middle of the black container, so it remains
-    /// one continuous shape. Falls back to a compact bar in the top-right corner without a notch.
+    /// one continuous shape. Falls back to a compact bar centered at the top without a notch.
     @objc private func reposition() {
         guard let screen = NSScreen.notched else { return }
         let leftWidth = statusWidth
@@ -471,16 +471,25 @@ final class QuotaHUDController {
             return
         } else {
             let h = Self.menuBarHeight(on: screen)
-            frame = NSRect(x: screen.frame.maxX - leftWidth - rightWidth - 8, y: screen.frame.maxY - h,
-                           width: leftWidth + rightWidth, height: h)
+            // Centered, where a notch would be. The top-right corner is where the system's own
+            // status items live (clock, Control Center), and pinning the bar there covered them; the
+            // middle of a wide display's menu bar is empty.
+            let w = leftWidth + rightWidth
+            frame = NSRect(x: screen.frame.midX - w / 2, y: screen.frame.maxY - h, width: w, height: h)
         }
-        panel.setFrame(frame, display: true)
+        // The panel reaches `overshoot` pt ABOVE the screen's top edge. With the shape's top edge
+        // exactly on the screen edge, the topmost physical pixel row was left uncovered (a thin line
+        // of wallpaper over the bar, measured on a real screenshot); the part that sticks out is
+        // simply off-screen. The content stays anchored to the bottom, so nothing moves.
+        let overshoot: CGFloat = 2
+        let full = NSRect(x: frame.minX, y: frame.minY, width: frame.width, height: frame.height + overshoot)
+        panel.setFrame(full, display: true)
 
         CATransaction.begin(); CATransaction.setDisableActions(true)
         let h = frame.height
-        container.frame = NSRect(origin: .zero, size: frame.size)
-        barMask.frame = CGRect(origin: .zero, size: frame.size)
-        barMask.path = Self.notchPath(width: frame.width, height: h,
+        container.frame = NSRect(origin: .zero, size: full.size)
+        barMask.frame = CGRect(origin: .zero, size: full.size)
+        barMask.path = Self.notchPath(width: full.width, height: full.height,
                                       topRadius: min(h * 0.28, 12), bottomRadius: h * 0.32)
         statusHosting.frame = NSRect(x: 0, y: 0, width: leftWidth, height: h)
         hosting.frame = NSRect(x: frame.width - rightWidth, y: 0, width: rightWidth, height: h)
