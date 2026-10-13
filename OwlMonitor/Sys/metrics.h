@@ -94,6 +94,11 @@ int dm_proc_env_value(pid_t pid, const char *key, char *buf, int size);
 /// count. Drives idle auto-stop — a server nobody is connected to is one nobody is using.
 int dm_tree_inbound_count(const pid_t *tree, int ntree, pid_t exclude_peer);
 
+/// The process's current working directory, copied into `buf` (NUL-terminated). Returns its length,
+/// or -1 if unreadable. Tells apart processes whose argv is useless (`claude` and `node` rewrite
+/// their own title to the bare word) by the project they are running in.
+int dm_proc_cwd(pid_t pid, char *buf, int size);
+
 /// The TCP port a process is LISTENing on (e.g. a dev server's port), or 0 if none.
 /// Used to identify a dev server started outside the app (e.g. "MiddleSpace :3001").
 int dm_proc_listen_port(pid_t pid);

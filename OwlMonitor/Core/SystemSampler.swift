@@ -542,7 +542,7 @@ final class SystemSampler {
         if isFramework || isDevRuntime(comm) {
             let port = Int(dm_proc_listen_port(pid))
             if isFramework || port > 0 {
-                let project = projectName(fromArgs: args) ?? comm
+                let project = projectName(fromArgs: args) ?? cwd(of: pid).flatMap { projectLabel(fromDirectory: $0) } ?? comm
                 let entry = (name: project + (port > 0 ? " :\(port)" : ""),
                              ext: true, isExtension: false, isClaude: false, extBuild: false)
                 cache[pid] = entry
@@ -586,7 +586,7 @@ final class SystemSampler {
                 }
             }
         }
-        let d = describe(comm: comm, args: args)
+        let d = describe(comm: comm, args: args, pid: pid)
         let entry = (name: d.name, ext: false, isExtension: d.isExtension, isClaude: false, extBuild: false)
         cache[pid] = entry
         portRecheckAt.removeValue(forKey: pid)
@@ -622,7 +622,7 @@ final class SystemSampler {
         return name.isEmpty ? nil : name
     }
 
-    nonisolated private static func describe(comm: String, args: String) -> (name: String, isExtension: Bool) {
+    nonisolated private static func describe(comm: String, args: String, pid: Int32 = 0) -> (name: String, isExtension: Bool) {
         // VS Code / Cursor language servers run from an extension folder referenced in their argv.
         // Read that extension's own package.json so the name comes from the extension, never a
         // hardcoded list. Falls back to the folder name, then the .app bundle, then the bare name.
@@ -632,15 +632,127 @@ final class SystemSampler {
         }
         // Claude Code itself (its node CLI / helpers) — otherwise it shows as a bare version like
         // "2.1.202". Match its package path so a bumped version keeps identifying.
-        if args.contains("@anthropic-ai/claude-code") || args.contains("/claude-code/") {
-            return ("Claude Code", false)
+        if args.contains("@anthropic-ai/claude-code") || args.contains("/claude-code/") || isClaudeCLI(comm: comm, args: args) {
+            return (runtimeName(comm: comm, args: args, cwd: cwd(of: pid), owner: nil) ?? "Claude Code", false)
         }
         // A framework task run OUTSIDE the app (e.g. `node …/MiddleSpace/node_modules/.bin/nuxt build`)
         // — name it "<project> · <task>" so a heavy orphan build/generate isn't a mystery "node" row.
         if let task = externalTaskName(args) { return (task, false) }
         // Otherwise identify the owning app from the bundle path in argv
         // (e.g. ".../Claude.app/Contents/Helpers/.../2.1.179" → "Claude").
-        return (appBundleName(inArgs: args) ?? comm, false)
+        if let app = appBundleName(inArgs: args) { return (app, false) }
+        // A bare `node` / `bun` / `deno` / `npm exec ...`: name it by what it runs and where.
+        if let name = runtimeName(comm: comm, args: args, cwd: cwd(of: pid), owner: ownerName(of: pid)) {
+            return (name, false)
+        }
+        return (comm, false)
+    }
+
+    /// The process's working directory, or nil (pid unknown / unreadable).
+    nonisolated private static func cwd(of pid: Int32) -> String? {
+        guard pid > 0 else { return nil }
+        var buf = [CChar](repeating: 0, count: 1024)
+        return dm_proc_cwd(pid, &buf, Int32(buf.count)) > 0 ? String(cString: buf) : nil
+    }
+
+    /// The app that owns this process (the "responsible" process: Cursor for its language servers,
+    /// Claude for its MCP servers), or nil when that's the process itself or launchd.
+    nonisolated private static func ownerName(of pid: Int32) -> String? {
+        guard pid > 0 else { return nil }
+        let owner = dm_responsible_pid(pid)
+        guard owner > 1, owner != pid else { return nil }
+        var buf = [CChar](repeating: 0, count: 256)
+        guard dm_proc_name(owner, &buf, Int32(buf.count)) > 0 else { return nil }
+        let name = String(cString: buf)
+        return name.isEmpty ? nil : name
+    }
+
+    /// `claude` as a process: its binary is named `claude`, and it rewrites its title, so argv is
+    /// just `claude`.
+    nonisolated static func isClaudeCLI(comm: String, args: String) -> Bool {
+        let first = args.split(separator: " ").first.map { String($0).split(separator: "/").last.map(String.init) ?? "" } ?? ""
+        return comm == "claude" || first == "claude"
+    }
+
+    /// Folder names too generic to identify a project on their own: "app" in a monorepo is no name.
+    nonisolated private static let genericFolders: Set<String> =
+        ["app", "apps", "web", "www", "site", "frontend", "front", "client", "server", "api",
+         "backend", "src", "packages", "ui", "admin", "dashboard", "docs"]
+
+    /// A project label from a directory: its folder name, prefixed with the parent when the folder is
+    /// generic ("PRYCED/app"). nil for `/`, the home directory itself, or a system location.
+    nonisolated static func projectLabel(fromDirectory dir: String) -> String? {
+        let parts = dir.split(separator: "/").map(String.init)
+        guard let last = parts.last else { return nil }
+        if dir == NSHomeDirectory() { return nil }
+        if parts.count <= 2, ["tmp", "var", "private", "Users", "usr", "opt", "Library"].contains(last) { return nil }
+        if genericFolders.contains(last.lowercased()), parts.count >= 2 { return "\(parts[parts.count - 2])/\(last)" }
+        return last
+    }
+
+    /// The same, from a path that runs through `/node_modules/`: the folder just before it.
+    nonisolated private static func projectLabel(fromPath path: String) -> String? {
+        guard let r = path.range(of: "/node_modules/") else { return nil }
+        return projectLabel(fromDirectory: String(path[..<r.lowerBound]))
+    }
+
+    /// A readable name for a JS/TS runtime or package-manager process ("PRYCED/app · vue-tsc",
+    /// "Owl-Monitor · vitest", "Claude Code · Owl-Monitor", "check-types (Cursor)") instead of the
+    /// bare "node" / "claude" its argv reduces to. Pure (no syscalls: cwd and owner are passed in),
+    /// so it is unit-tested. nil when the process isn't a runtime or there's nothing to say.
+    ///
+    /// The WHAT comes from argv: the `.bin/<tool>` or `node_modules/<package>` it runs, the word after
+    /// `npm exec` / `npx`, else the script's file name. The WHERE comes from the path in argv, else
+    /// the working directory, so the same tool in two projects reads differently.
+    nonisolated static func runtimeName(comm: String, args: String, cwd: String?, owner: String?) -> String? {
+        let tokens = args.split(separator: " ").map(String.init)
+        let first = tokens.first.map { $0.split(separator: "/").last.map(String.init) ?? $0 } ?? comm
+        let place = cwd.flatMap { projectLabel(fromDirectory: $0) }
+
+        // Claude Code itself: which project's session it is.
+        if isClaudeCLI(comm: comm, args: args) || args.contains("/claude-code/") {
+            return place.map { "Claude Code · \($0)" }
+        }
+
+        let runtimes: Set<String> = ["node", "bun", "deno", "tsx", "ts-node", "nodemon", "npm", "npx", "pnpm", "pnpx", "yarn"]
+        guard runtimes.contains(first) || runtimes.contains(comm) else { return nil }
+
+        var tool: String?
+        var project: String?
+        for t in tokens.dropFirst() where !t.hasPrefix("-") || t.contains("/node_modules/") {
+            if let r = t.range(of: "/node_modules/") {
+                let after = t[r.upperBound...].split(separator: "/").map(String.init)
+                if after.first == ".bin", after.count > 1 { tool = after[1] }
+                else if let pkg = after.first { tool = pkg.hasPrefix("@") && after.count > 1 ? after[1] : pkg }
+                project = projectLabel(fromPath: t)
+                break
+            }
+        }
+        let managers: Set<String> = ["npm", "npx", "pnpm", "pnpx", "yarn"]
+        if tool == nil, managers.contains(first) || managers.contains(comm) {
+            // `npm exec vitest run ...` / `npx -y pkg` / `pnpm run <script>`: the first word that isn't a verb or flag.
+            let verbs: Set<String> = ["exec", "x", "dlx", "run", "run-script", "start", "test", "--"]
+            let words = tokens.dropFirst().filter { !$0.hasPrefix("-") }
+            tool = words.first(where: { !verbs.contains($0) }) ?? words.first
+        }
+        if tool == nil {
+            // A script file: `node scripts/check-types.mjs`, `node dist/server.js`.
+            let exts = [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".tsx"]
+            if let script = tokens.dropFirst().first(where: { t in !t.hasPrefix("-") && exts.contains { t.hasSuffix($0) } }) {
+                let file = script.split(separator: "/").last.map(String.init) ?? script
+                let stem = file.split(separator: ".").dropLast().joined(separator: ".")
+                tool = stem.isEmpty ? file : stem
+            } else if tokens.contains("-e") || tokens.contains("-p") || tokens.contains("--eval") {
+                tool = "inline script"
+            }
+        }
+        let location = project ?? place
+        switch (location, tool) {
+        case let (w?, t?): return "\(w) · \(t)"
+        case let (nil, t?): return owner.map { "\(t) (\($0))" } ?? t
+        case let (w?, nil): return "\(first) · \(w)"
+        default:           return owner.map { "\(first) (\($0))" }
+        }
     }
 
     /// A framework CLI task running unsupervised, named `<project> · <task>` — e.g.

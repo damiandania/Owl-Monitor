@@ -320,6 +320,20 @@ int dm_responsible_pid(pid_t pid) {
     return r > 0 ? (int)r : -1;
 }
 
+int dm_proc_cwd(pid_t pid, char *buf, int size) {
+    if (size <= 0) return -1;
+    buf[0] = '\0';
+    struct proc_vnodepathinfo vpi;
+    int r = proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &vpi, sizeof(vpi));
+    if (r < (int)sizeof(vpi)) return -1;
+    size_t n = strlen(vpi.pvi_cdir.vip_path);
+    if (n == 0) return -1;
+    if ((int)n > size - 1) n = (size_t)(size - 1);
+    memcpy(buf, vpi.pvi_cdir.vip_path, n);
+    buf[n] = '\0';
+    return (int)n;
+}
+
 // 1 if the process's executable lives under a macOS system location (Apple daemons, system
 // frameworks, bundled system apps, privileged helpers), else 0. Used to badge system/background
 // processes distinctly from user apps in the process table.

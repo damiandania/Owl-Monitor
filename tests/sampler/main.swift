@@ -132,6 +132,40 @@ let aggZero = SystemSampler.aggregate(
     devs: [], build: nil, coreCount: 8, totalMem: 0, topN: 40)
 chk(aggZero.contains { $0.id == 700 }, "aggregate: totalMem=0 guarded")
 
+// --- runtimeName: bare `node` / `claude` get a real name (args are real ones seen on a dev Mac) ---
+func rn(_ comm: String, _ args: String, cwd: String? = nil, owner: String? = nil) -> String? {
+    SystemSampler.runtimeName(comm: comm, args: args, cwd: cwd, owner: owner)
+}
+chk(rn("node", "node /Users/x/Dev/Gallaxxai/PRYCED/app/node_modules/.bin/vue-tsc -b /Users/x/Dev/Gallaxxai/PRYCED/app/.nuxt-check/tsconfig.root.json --noEmit")
+    == "PRYCED/app · vue-tsc", "runtime: .bin tool, generic folder 'app' gets its parent")
+chk(rn("node", "node /Users/x/Dev/Gallaxxai/PRYCED/app/node_modules/.bin/vitest run --maxWorkers=1 test/a.spec.ts")
+    == "PRYCED/app · vitest", "runtime: vitest")
+chk(rn("node", "node scripts/check-types.mjs", cwd: "/Users/x/Dev/Gallaxxai/PRYCED/app")
+    == "PRYCED/app · check-types", "runtime: script file named, project from cwd")
+chk(rn("node", "/Users/x/.local/share/fnm/node-versions/v22/installation/bin/node --experimental-import-meta-resolve --require /Users/x/Dev/Vogels/Owl/node_modules/vitest/suppress-warnings.cjs --conditions node /Users/x/Dev/Vogels/Owl/node_modules/vitest/dist/workers/forks.js")
+    == "Owl · vitest", "runtime: flags skipped, package from node_modules")
+chk(rn("deliverables.spec.ts", "npm exec vitest run --maxWorkers=1 test/nuxt/deliverables.spec.ts", cwd: "/Users/x/Dev/Gallaxxai/PRYCED/app")
+    == "PRYCED/app · vitest", "runtime: npm exec <tool>, title rewritten by npm")
+chk(rn("node", "npx -y @modelcontextprotocol/server-filesystem /Users/x") == "@modelcontextprotocol/server-filesystem",
+    "runtime: npx scoped package")
+chk(rn("node", "node /Users/x/mcp/node_modules/@scope/some-server/dist/index.js", owner: "Claude") == "mcp · some-server",
+    "runtime: scoped package under node_modules")
+chk(rn("node", "node", cwd: "/Users/x/Dev/Vogels/Owl-Monitor") == "node · Owl-Monitor", "runtime: bare node → cwd project")
+chk(rn("node", "node", cwd: "/", owner: "Cursor") == "node (Cursor)", "runtime: bare node, no project → owner app")
+chk(rn("node", "node", cwd: nil, owner: nil) == nil, "runtime: nothing to say → nil (caller keeps 'node')")
+chk(rn("node", "node -e console.log(1)", cwd: "/") == "inline script", "runtime: node -e")
+chk(rn("claude", "claude", cwd: "/Users/x/Dev/Vogels/Owl-Monitor") == "Claude Code · Owl-Monitor", "claude: session named by its project")
+chk(rn("claude", "/Users/x/Library/Application Support/Claude/claude-code/2.1.295/abc/claude.app/Contents/MacOS/claude --output-format stream-json", cwd: "/Users/x/Dev/Gallaxxai/PRYCED/app")
+    == "Claude Code · PRYCED/app", "claude: desktop session by cwd")
+chk(rn("claude", "claude", cwd: NSHomeDirectory()) == nil, "claude: home dir is no project → nil (caller says 'Claude Code')")
+chk(rn("Safari", "/Applications/Safari.app/Contents/MacOS/Safari") == nil, "runtime: other programs untouched")
+chk(rn("nodemon-ish", "somebinary node_modules") == nil, "runtime: not a runtime → nil")
+chk(SystemSampler.projectLabel(fromDirectory: "/Users/x/Dev/Vogels/Owl-Monitor") == "Owl-Monitor", "label: plain folder")
+chk(SystemSampler.projectLabel(fromDirectory: "/Users/x/Dev/Site/web") == "Site/web", "label: generic folder + parent")
+chk(SystemSampler.projectLabel(fromDirectory: "/") == nil && SystemSampler.projectLabel(fromDirectory: "/tmp") == nil, "label: root and /tmp are no project")
+chk(SystemSampler.isClaudeCLI(comm: "claude", args: "claude") && !SystemSampler.isClaudeCLI(comm: "node", args: "node x.js"),
+    "claude: CLI detection")
+
 // --- projectName(fromArgs:) — external dev-server labelling ---
 chk(SystemSampler.projectName(fromArgs: "node /Users/x/Dev/MiddleSpace/node_modules/.bin/nuxt dev") == "MiddleSpace",
     "projectName: folder before node_modules")
