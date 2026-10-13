@@ -187,6 +187,23 @@ chk(r.pressure == .stuck && r.justStuck, "pressure: non-build CPU still trips de
 r = SS.evaluatePressure(cpu: 100, buildCPU: 70, memPercent: 50, swapPercent: 10, hotSince: 100*G, now: 120*G, sustainSeconds: S, current: .normal)
 chk(r.pressure == .normal, "pressure: build plus light other load stays normal")
 
+// Kernel memory-pressure level (1 normal · 2 warning · 4 critical) beats the used%/swap% guess: an 8 GB
+// Mac at 91 % used with leftover swap is NOT stuck while the kernel says normal/warning.
+r = SS.evaluatePressure(cpu: 40, buildCPU: 0, memPercent: 91, swapPercent: 68, hotSince: 100*G, now: 130*G, sustainSeconds: S, current: .normal, memoryLevel: 1)
+chk(r.pressure == .normal && !r.justStuck, "pressure: 91% used + 68% swap but kernel level normal → NOT stuck")
+r = SS.evaluatePressure(cpu: 40, buildCPU: 0, memPercent: 91, swapPercent: 68, hotSince: 100*G, now: 130*G, sustainSeconds: S, current: .normal, memoryLevel: 2)
+chk(r.pressure == .normal, "pressure: kernel level warning (yellow) → NOT stuck")
+r = SS.evaluatePressure(cpu: 40, buildCPU: 0, memPercent: 70, swapPercent: 10, hotSince: 100*G, now: 130*G, sustainSeconds: S, current: .normal, memoryLevel: 4)
+chk(r.pressure == .stuck && r.justStuck && r.reason.contains("critical"), "pressure: kernel level critical, sustained → stuck", r.reason)
+r = SS.evaluatePressure(cpu: 40, buildCPU: 0, memPercent: 70, swapPercent: 10, hotSince: 100*G, now: 105*G, sustainSeconds: S, current: .normal, memoryLevel: 4)
+chk(r.pressure == .normal, "pressure: critical but not yet sustained → not stuck")
+r = SS.evaluatePressure(cpu: 40, buildCPU: 0, memPercent: 92, swapPercent: 70, hotSince: 100*G, now: 140*G, sustainSeconds: S, current: .stuck, memoryLevel: 2)
+chk(r.pressure == .normal && r.hotSince == nil, "pressure: stuck clears once the kernel drops below critical, even at 92% used")
+r = SS.evaluatePressure(cpu: 40, buildCPU: 0, memPercent: 50, swapPercent: 10, hotSince: 100*G, now: 140*G, sustainSeconds: S, current: .stuck, memoryLevel: 4)
+chk(r.pressure == .stuck, "pressure: still critical → stays stuck")
+r = SS.evaluatePressure(cpu: 95, buildCPU: 0, memPercent: 50, swapPercent: 10, hotSince: 100*G, now: 120*G, sustainSeconds: S, current: .normal, memoryLevel: 1)
+chk(r.pressure == .stuck, "pressure: CPU pinned still trips regardless of memory level")
+
 // --- live off-main sampling (the async collect pass) ---
 // Rows + system stats materialize, a supervised leader resolves to its own row via the single
 // sid-grouping sweep (this process is the leader), and a dead leader drops out instead of crashing.

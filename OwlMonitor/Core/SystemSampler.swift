@@ -351,7 +351,8 @@ final class SystemSampler {
             .reduce(0.0) { $0 + $1.cpuPerCore } / Double(coreCount)
         let r = Self.evaluatePressure(cpu: systemCPU, buildCPU: buildCPU, memPercent: systemMemPercent,
                                       swapPercent: systemSwapPercent, hotSince: hotSince,
-                                      now: now, sustainSeconds: sustainSeconds, current: pressure)
+                                      now: now, sustainSeconds: sustainSeconds, current: pressure,
+                                      memoryLevel: Int(dm_memory_pressure_level()))
         hotSince = r.hotSince
         pressure = r.pressure
         if r.justStuck {
@@ -463,25 +464,32 @@ final class SystemSampler {
     /// first so a plain build — which maxes the cores on purpose — never reads as a stuck machine.
     nonisolated static func evaluatePressure(
         cpu: Double, buildCPU: Double, memPercent: Double, swapPercent: Double,
-        hotSince: UInt64?, now: UInt64, sustainSeconds: Double, current: Pressure
+        hotSince: UInt64?, now: UInt64, sustainSeconds: Double, current: Pressure,
+        memoryLevel: Int = 0
     ) -> (pressure: Pressure, reason: String, hotSince: UInt64?, justStuck: Bool) {
         // A build saturating the cores is expected, bounded work that finishes — not a stuck machine.
         // Discount it so pressure fires only when something ELSE is pinning the cores. (Memory pressure
         // below stays on raw memory/swap: a build thrashing RAM IS real pressure.)
         let cpu = max(0, cpu - buildCPU)
         let cpuHot = cpu >= 90
-        let memHot = memPercent >= 90 && swapPercent >= 50
+        // Memory is hot on the KERNEL's verdict (`memoryLevel`: 4 = critical, what turns Activity
+        // Monitor's graph red), not on "used %". Used % counts compressed memory, and swap stays full
+        // long after the peak that filled it, so on an 8 GB Mac `used ≥ 90 % && swap ≥ 50 %` is true
+        // most of the day — the machine read as stuck while it ran fine, and since clearing needed
+        // used < 85 % it often never cleared. Only when the level can't be read (0) does the old
+        // percentage rule apply.
+        let memHot = memoryLevel > 0 ? memoryLevel >= 4 : (memPercent >= 90 && swapPercent >= 50)
         if cpuHot || memHot {
             let since = hotSince ?? now
             let elapsed = Double(now &- since) / 1_000_000_000
             if current == .normal, elapsed >= sustainSeconds {
                 let reason = cpuHot
                     ? "CPU pinned at \(Int(cpu))% for \(Int(elapsed))s"
-                    : "Memory \(Int(memPercent))% full, swapping (\(Int(swapPercent))%)"
+                    : "Memory pressure critical (\(Int(memPercent))% used, swap \(Int(swapPercent))%)"
                 return (.stuck, reason, since, true)
             }
             return (current, "", since, false)
-        } else if cpu < 70, memPercent < 85 {   // hysteresis: clear once it cools
+        } else if cpu < 70, memoryLevel > 0 ? memoryLevel < 4 : memPercent < 85 {   // hysteresis: clear once it cools
             return (.normal, "", nil, false)
         }
         return (current, "", hotSince, false)

@@ -267,6 +267,15 @@ int dm_session_pids(pid_t sid, pid_t *out, int cap) {
     return w;
 }
 
+int dm_memory_pressure_level(void) {
+    int level = 0;
+    size_t len = sizeof(level);
+    if (sysctlbyname("kern.memorystatus_vm_pressure_level", &level, &len, NULL, 0) != 0) {
+        return 0;
+    }
+    return level;
+}
+
 double dm_load_avg(void) {
     double avg[3];
     if (getloadavg(avg, 3) < 0) {

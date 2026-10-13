@@ -32,11 +32,18 @@ final class PressureManager {
 
     init(app: AppState) { self.app = app }
 
-    /// True while the machine is stuck / being evaluated / has kill suggestions — drives the yellow
-    /// "System pressure" tab in the global terminal.
+    /// True while the machine is actually stuck — or, during a build, while there are suggestions to
+    /// act on. Drives the yellow "System pressure" tab and the notch icon.
+    ///
+    /// It follows the sampler's live state, NOT the bookkeeping around it. It used to also be true
+    /// while an evaluation was in flight or any suggestion was left over, so a slow `claude` call, or
+    /// its answer landing after the episode had already ended, kept the alert up on a machine that
+    /// had recovered — and every build filled the list with a "heaviest processes" guess even when
+    /// nothing was wrong.
     var systemUnderPressure: Bool {
         if dismissed { return false }
-        return isEvaluating || !killSuggestions.isEmpty || sampler.pressure == .stuck
+        if sampler.pressure == .stuck { return true }
+        return !killSuggestions.isEmpty && app.builds.values.contains { $0.isRunning }
     }
 
     /// User closed the pressure tab — clear it and keep it hidden until pressure re-triggers.
@@ -66,6 +73,16 @@ final class PressureManager {
             dismissed = false
         }
     }
+
+    /// Whether suggestions are still wanted: the machine is stuck, or a build is relieving memory.
+    private var wantsSuggestions: Bool {
+        sampler.pressure == .stuck || app.builds.values.contains { $0.isRunning }
+    }
+
+    /// Longest a `claude` refinement may take. It's one JSON answer; past this it's wedged (the CLI
+    /// fighting another session for the same login, say) and would otherwise hold `isEvaluating` — and
+    /// block every later refresh — indefinitely.
+    private static let refinementTimeout: Duration = .seconds(90)
 
     /// Called once on a genuine normal→stuck transition: focuses the pressure tab, auto-closes
     /// orphaned dev processes (one-shot), then computes the kill suggestions.
@@ -141,12 +158,20 @@ final class PressureManager {
         lastRefinement = Date()
         let cpu = s.systemCPU, mem = s.systemMemPercent, swap = s.systemSwapPercent, cores = s.coreCount
         let model = app.settings.analysisModel
-        Task { [weak self] in
+        let work = Task { [weak self] in
             let recs = await ResourceAdvisor.pressureKills(
                 systemCPU: cpu, systemMemPercent: mem, systemSwapPercent: swap,
                 coreCount: cores, procs: procs, model: model)
-            if !recs.isEmpty { self?.killSuggestions = recs }
-            self?.isEvaluating = false
+            guard let self else { return }
+            // The answer can arrive after the episode is over — don't resurrect a cleared list.
+            if !recs.isEmpty, !Task.isCancelled, self.wantsSuggestions { self.killSuggestions = recs }
+            self.isEvaluating = false
+        }
+        Task { [weak self] in
+            try? await Task.sleep(for: Self.refinementTimeout)
+            guard let self, self.isEvaluating else { return }
+            work.cancel()   // ClaudeRunner terminates its subprocess on cancellation
+            self.isEvaluating = false
         }
     }
 

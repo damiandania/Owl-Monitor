@@ -54,6 +54,12 @@ int dm_session_pids(pid_t sid, pid_t *out, int cap);
 /// 1-minute load average, or -1 on error.
 double dm_load_avg(void);
 
+/// The kernel's own memory-pressure level — the signal behind Activity Monitor's memory-pressure
+/// graph: 1 = normal (green), 2 = warning (yellow), 4 = critical (red). 0 if it can't be read.
+/// Unlike "used %" it knows that compressed and cached pages are reclaimable, so an 8 GB Mac sitting
+/// at 90 % used with some swap left over from an earlier peak still reads normal.
+int dm_memory_pressure_level(void);
+
 /// Fills `out` (capacity `cap`) with every pid on the system. Returns count written.
 int dm_all_pids(pid_t *out, int cap);
 
