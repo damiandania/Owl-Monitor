@@ -108,6 +108,13 @@ extension AppState {
         Self.open(target: url.absoluteString, withAppNamed: settings.browser, fallback: url)
     }
 
+    /// Open `http://localhost:<port>/` in the chosen browser — for a specific server (a preview and the
+    /// dev server of one project run on different ports, so "the project's URL" alone can't say which).
+    func openInBrowser(port: Int) {
+        guard let url = URL(string: "http://localhost:\(port)/") else { return }
+        Self.open(target: url.absoluteString, withAppNamed: settings.browser, fallback: url)
+    }
+
     func openInEditor(_ project: Project) {
         let editor = settings.editor ?? installedEditors.first ?? "Visual Studio Code"
         Self.open(target: project.path, withAppNamed: editor, fallback: URL(fileURLWithPath: project.path))

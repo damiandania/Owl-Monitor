@@ -78,6 +78,8 @@ struct GlobalTerminalView: View {
             TabPill(icon: c.icon, name: c.projectName, help: "\(c.title) · \(c.projectName)",
                     isPressure: false, selected: selected, namespace: tabSelection, tint: c.status.color,
                     onSelect: { app.selectedTerminalID = c.tabID },
+                    // Double-click a RUNNING server's tab to open its page (a stopped one keeps its last port, which is dead).
+                    onOpen: (c.status.showsStop ? c.port : nil).map { port in { app.openInBrowser(port: port) } },
                     closeHelp: "Close \(c.title.lowercased()) · \(c.projectName)", onClose: c.onClose)
         case .claude(let row):
             TabPill(icon: "terminal", assetIcon: "ClaudeLogo", name: row.name,
@@ -122,6 +124,8 @@ struct GlobalTerminalView: View {
         let namespace: Namespace.ID
         let tint: Color
         let onSelect: () -> Void
+        /// Double-click action; nil for tabs with nothing to open.
+        var onOpen: (() -> Void)? = nil
         let closeHelp: String
         let onClose: () -> Void
         @State private var hovering = false
@@ -135,8 +139,11 @@ struct GlobalTerminalView: View {
                         .lineLimit(1)
                 }
                 .contentShape(Rectangle())
+                // Double first, so it isn't swallowed by the single tap; the first click of a
+                // double-click still selects the tab, which is what you want anyway.
+                .onTapGesture(count: 2) { onOpen?() }
                 .onTapGesture(perform: onSelect)
-                .help(help)
+                .help(onOpen == nil ? help : help + " — double-click to open in the browser")
 
                 trailing.frame(width: 14, height: 14)   // fixed slot so dot↔✕ never shifts layout
             }
