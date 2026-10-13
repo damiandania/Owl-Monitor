@@ -5,8 +5,8 @@ import SwiftUI
 struct ActivityView: View {
     @Environment(AppState.self) private var app
     @State private var percentOfMachine = false
-    /// Collapsed by default: the card shows just the meters until the user expands the process list.
-    @State private var expanded = false
+    /// Open by default: the process list is the point of this card. Still collapsible per session.
+    @State private var expanded = true
     /// The timeline-charts accordion, sibling to the process list. Ephemeral like `expanded`.
     @State private var chartsExpanded = false
     /// Height of the process list, set by dragging the handle under it. Remembered across launches.
