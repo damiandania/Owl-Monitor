@@ -79,8 +79,9 @@ struct GlobalTerminalView: View {
             TabPill(icon: c.icon, name: c.projectName, help: "\(c.title) · \(c.projectName)",
                     isPressure: false, selected: selected, namespace: tabSelection, tint: c.status.color,
                     onSelect: { app.selectedTerminalID = c.tabID },
-                    // Double-click a RUNNING server's tab to open its page (a stopped one keeps its last port, which is dead).
-                    onOpen: (c.status.showsStop ? c.port : nil).map { port in { app.openInBrowser(port: port) } },
+                    // Double-click a project's tab to jump to that project's page in Owl Monitor
+                    // (its dashboard in the sidebar selection), not just to its terminal.
+                    onOpen: { app.selectedProjectID = c.projectID },
                     closeHelp: "Close \(c.title.lowercased()) · \(c.projectName)", onClose: c.onClose)
         case .claude(let row):
             TabPill(icon: "terminal", assetIcon: "ClaudeLogo", name: row.name,
@@ -125,7 +126,7 @@ struct GlobalTerminalView: View {
         let namespace: Namespace.ID
         let tint: Color
         let onSelect: () -> Void
-        /// Double-click action; nil for tabs with nothing to open.
+        /// Double-click action; nil for tabs that have no project page to go to.
         var onOpen: (() -> Void)? = nil
         let closeHelp: String
         let onClose: () -> Void
@@ -144,7 +145,7 @@ struct GlobalTerminalView: View {
                 // double-click still selects the tab, which is what you want anyway.
                 .onTapGesture(count: 2) { onOpen?() }
                 .onTapGesture(perform: onSelect)
-                .help(onOpen == nil ? help : help + " — double-click to open in the browser")
+                .help(onOpen == nil ? help : help + " — double-click to open the project")
 
                 trailing.frame(width: 14, height: 14)   // fixed slot so dot↔✕ never shifts layout
             }
@@ -271,13 +272,25 @@ struct GlobalTerminalView: View {
 /// Scrolling by trackpad or wheel is unaffected; only the bar goes. Put it INSIDE the scroll content,
 /// where `enclosingScrollView` can find it.
 private struct HideScrollers: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { NSView() }
-    func updateNSView(_ view: NSView, context: Context) {
-        // The view isn't in the hierarchy yet during the first pass — look on the next turn.
-        DispatchQueue.main.async {
-            guard let scroll = view.enclosingScrollView else { return }
-            scroll.hasHorizontalScroller = false
-            scroll.hasVerticalScroller = false
+    func makeNSView(context: Context) -> Anchor { Anchor() }
+    func updateNSView(_ view: Anchor, context: Context) { view.hideScrollers() }
+
+    /// Hides the scrollers as soon as it lands in a scroll view, and KEEPS them hidden: SwiftUI
+    /// re-applies its own scroller settings on later updates (a single pass was undone, and the bar
+    /// came back), so the properties are observed and forced off whenever they flip on.
+    final class Anchor: NSView {
+        private var observations: [NSKeyValueObservation] = []
+
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); hideScrollers() }
+
+        func hideScrollers() {
+            guard observations.isEmpty, let scroll = enclosingScrollView else { return }
+            func off(_ s: NSScrollView) { s.hasHorizontalScroller = false; s.hasVerticalScroller = false }
+            off(scroll)
+            observations = [
+                scroll.observe(\.hasHorizontalScroller, options: [.new]) { s, _ in if s.hasHorizontalScroller { off(s) } },
+                scroll.observe(\.hasVerticalScroller, options: [.new]) { s, _ in if s.hasVerticalScroller { off(s) } },
+            ]
         }
     }
 }
