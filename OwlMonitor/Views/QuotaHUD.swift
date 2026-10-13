@@ -455,7 +455,7 @@ final class QuotaHUDController {
 
     /// One frame for the whole bar: the project-state strip hugs the notch's left side and quota
     /// readout the right. The physical notch covers the middle of the black container, so it remains
-    /// one continuous shape. Falls back to a compact bar in the top-right corner without a notch.
+    /// one continuous shape. Falls back to a compact bar centered at the top without a notch.
     @objc private func reposition() {
         guard let screen = NSScreen.notched else { return }
         let leftWidth = statusWidth
@@ -471,8 +471,11 @@ final class QuotaHUDController {
             return
         } else {
             let h = Self.menuBarHeight(on: screen)
-            frame = NSRect(x: screen.frame.maxX - leftWidth - rightWidth - 8, y: screen.frame.maxY - h,
-                           width: leftWidth + rightWidth, height: h)
+            // Centered, where a notch would be. The top-right corner is where the system's own
+            // status items live (clock, Control Center), and pinning the bar there covered them; the
+            // middle of a wide display's menu bar is empty.
+            let w = leftWidth + rightWidth
+            frame = NSRect(x: screen.frame.midX - w / 2, y: screen.frame.maxY - h, width: w, height: h)
         }
         // The panel reaches `overshoot` pt ABOVE the screen's top edge. With the shape's top edge
         // exactly on the screen edge, the topmost physical pixel row was left uncovered (a thin line
