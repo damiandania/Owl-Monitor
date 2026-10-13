@@ -86,6 +86,11 @@ int dm_proc_args(pid_t pid, char *buf, int size);
 // -2 when the process shows no environment at all: macOS hides it for Apple platform binaries.
 int dm_proc_env_value(pid_t pid, const char *key, char *buf, int size);
 
+/// When `pid` started, in microseconds since the epoch, or 0 if unreadable. With the pid it names one
+/// process for good — a pid is reused, a (pid, start time) pair never is — so a verdict about a
+/// process can be cached safely.
+uint64_t dm_proc_start_time(pid_t pid);
+
 /// How many TCP connections the process tree `tree` (`ntree` pids) has ACCEPTED from OUTSIDE and still
 /// holds open: established sockets on a port the tree listens on (a browser tab's page load or HMR
 /// websocket) whose other end isn't another process of the same tree (a bundler talking to its own
