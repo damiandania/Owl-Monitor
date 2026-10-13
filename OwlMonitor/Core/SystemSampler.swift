@@ -3,7 +3,7 @@ import Observation
 import IOKit   // links IOKit.framework (autolink) so metrics.c's temperature-sensor read resolves
 
 /// One row in the system process table.
-struct ProcessRow: Identifiable, Sendable {
+struct ProcessRow: Identifiable, Sendable, Equatable {
     let id: Int32          // pid (negative = a synthetic aggregated row: -2 = build, else -pid)
     let name: String
     let cpuPerCore: Double // per-core % (can exceed 100)
@@ -141,7 +141,10 @@ final class SystemSampler {
         if !out.temperature.isNaN, Int(out.temperature.rounded()) != Int(cpuTemperature.rounded()) {
             cpuTemperature = out.temperature
         }
-        processes = out.processes
+        // Same rule for the list: only when a row changed at the precision the table shows. Every
+        // reassignment re-evaluates everything that reads `processes` (the table, the notch menu, the
+        // Claude-shell pane), and most ticks only move a CPU figure by a fraction of a percent.
+        if !Self.sameAtDisplayPrecision(out.processes, processes) { processes = out.processes }
         let shells = out.processes.filter(\.isClaude)
         if shells.count != claudeShells.count
             || !zip(shells, claudeShells).allSatisfy({ $0.id == $1.id && $0.name == $1.name }) {
@@ -362,6 +365,24 @@ final class SystemSampler {
     }
 
     // MARK: - Pure logic (testable without the C metrics or the run loop)
+
+    /// Whether two process lists would draw identically: same rows in the same order with the same
+    /// names and flags, CPU equal to the whole percent and memory to the megabyte (the table's
+    /// precision). Lets a tick that changes nothing visible skip republishing.
+    nonisolated static func sameAtDisplayPrecision(_ a: [ProcessRow], _ b: [ProcessRow]) -> Bool {
+        guard a.count == b.count else { return false }
+        for (x, y) in zip(a, b) {
+            guard x.id == y.id, x.name == y.name,
+                  x.cpuPerCore.rounded() == y.cpuPerCore.rounded(),
+                  (x.memBytes / 1_048_576).rounded() == (y.memBytes / 1_048_576).rounded(),
+                  x.isDevServer == y.isDevServer, x.isBuild == y.isBuild, x.isWorker == y.isWorker,
+                  x.isExternalDev == y.isExternalDev, x.isExternalBuild == y.isExternalBuild,
+                  x.isExtension == y.isExtension, x.isClaude == y.isClaude,
+                  x.isPreview == y.isPreview, x.isSystem == y.isSystem
+            else { return false }
+        }
+        return true
+    }
 
     /// Aggregates each dev-server tree into its OWN identified row, the build tree into one row
     /// (id -2), always keeps rows already flagged `isExternalDev` (an identified dev server running

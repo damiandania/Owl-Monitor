@@ -377,10 +377,13 @@ final class QuotaHUDController {
         reposition()
         panel.orderFrontRegardless()
 
-        popover.contentViewController = NSHostingController(
-            rootView: MenuBarView()
-                .environment(appState).environment(\.locale, appState.uiLocale)
-                .onHover { [weak self] in self?.menuHover($0) })
+        // The menu's content exists only while it's open (see `openMenu`), and is dropped once it
+        // closes — however it closes (hover-out, a click elsewhere, Escape).
+        NotificationCenter.default.addObserver(
+            forName: NSPopover.didCloseNotification, object: popover, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.popover.contentViewController = nil }
+        }
 
         updateQuotaView()
         updateStatusStrip()
@@ -438,6 +441,15 @@ final class QuotaHUDController {
     private func openMenu() {
         closeWork?.cancel()
         guard !popover.isShown else { return }
+        // Built fresh on each open rather than once at launch. A hosting controller keeps its SwiftUI
+        // graph live even while the popover is closed, and this menu observes nearly all of AppState
+        // plus a once-a-second TimelineView, so it was being re-rendered every second, unseen.
+        if popover.contentViewController == nil {
+            popover.contentViewController = NSHostingController(
+                rootView: MenuBarView()
+                    .environment(appState).environment(\.locale, appState.uiLocale)
+                    .onHover { [weak self] in self?.menuHover($0) })
+        }
         popover.show(relativeTo: statusHosting.bounds, of: statusHosting, preferredEdge: .minY)
     }
 
