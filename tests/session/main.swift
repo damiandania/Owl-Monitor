@@ -185,7 +185,9 @@ func runSessionTests() async -> Int {
     let bigBuild = BuildRunner(project: Project(name: "big", path: "/tmp",
         buildCommand: "sh -c 'seq 1 5000; exit 0'"))
     bigBuild.start(memoryGB: 2)
-    try? await Task.sleep(for: .seconds(3))
+    // Bounded wait for the build to finish rather than a fixed sleep: on a loaded machine 5000 lines
+    // can take longer than 3 s to stream through.
+    for _ in 0..<100 where bigBuild.result == nil { try? await Task.sleep(for: .milliseconds(100)) }
     check("trim: build finished", bigBuild.result == 0, "result=\(String(describing: bigBuild.result))")
     check("trim: count within cap+slack",
           bigBuild.logLines.count >= 4000 && bigBuild.logLines.count <= 4201,
@@ -199,7 +201,9 @@ func runSessionTests() async -> Int {
     let spamSession = DevSession(project: Project(name: "spam", path: "/tmp",
         devCommand: "sh -c 'seq 1 5000; sleep 30'", memoryGB: 2))
     spamSession.start(memoryGB: 2)
-    try? await Task.sleep(for: .seconds(3))
+    for _ in 0..<100 where !spamSession.logLines.contains(where: { $0 == "5000" }) {
+        try? await Task.sleep(for: .milliseconds(100))
+    }
     check("trim: dev log within cap+slack",
           spamSession.logLines.count >= 2000 && spamSession.logLines.count <= 2200,
           "count=\(spamSession.logLines.count)")
