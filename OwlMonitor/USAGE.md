@@ -59,11 +59,16 @@ For a **build** failure the server fields don't carry the compiler error — the
 
 The heap maps to `NODE_OPTIONS=--max-old-space-size`. It is **deterministic**:
 
-- **Auto** (default): the framework default — Nuxt/Next 8 GB, Astro/Vite 4 GB, Node/Express 2 GB —
-  never a stale stored value. (This is the fix for the 1 GB → OOM bug.)
+- **Auto** (default): the project's *learned* level — 4 GB to start, climbing on each out-of-memory and
+  remembered — never a stale stored value. (This is the fix for the 1 GB → OOM bug.) With several
+  servers running it is trimmed to an even share of the RAM left after macOS (**Settings → General →
+  Memory → Share RAM between servers**): on an 8 GB Mac, 4 GB alone, 3 GB each for two, 2 GB each for
+  three — never below what the project already ran out of memory at.
 - **Manual**: `owl-monitor up --gb N` pins an explicit value (and turns auto off).
 - Always **floored** at 2 GB and **capped at physical RAM**. If you ask for more than the machine
-  has, the launch reports it: `launched X (Nuxt, 8 GB — capped from 99 GB to fit 8 GB RAM)`.
+  has, the launch reports it: `launched X (Nuxt, 8 GB — capped from 99 GB to fit 8 GB RAM)`; when the
+  shared-RAM budget trimmed it, it says so too: `launched X (Nuxt, 3 GB — shared: trimmed from 4 GB so
+  the servers running fit 8 GB RAM)`.
 - **OOM recovery**: a crash that looks like a V8 out-of-memory is retried once with a bigger heap; if
   it still can't fit, the server is left `Failed` with an OOM `lastError` suggesting `--gb`.
 
@@ -76,6 +81,14 @@ The heap maps to `NODE_OPTIONS=--max-old-space-size`. It is **deterministic**:
   backoff (1s, 2s, 4s), bounded to 3 attempts per stable run — and the **port is pinned** across
   restarts so it doesn't drift (3000 → 3001). A server that never became healthy (a config error) is
   left `Failed` rather than looped.
+- **No port collisions**: a project with no fixed port gets a concrete free one that no sibling session
+  holds or is about to bind, and keeps it across restarts while it's still free.
+- **No zombie servers**: every launch is tagged `OWL_MONITOR_PROJECT=<id>:<kind>`. If Owl Monitor quits
+  unexpectedly, the next launch finds the trees it left running, stops them and starts them again under
+  supervision (a notification says which); a 30 s sweep catches stragglers. A leader that dies first has
+  its children swept at once. Untagged processes — a server you started yourself — are never touched.
+- **Idle servers** (opt-in, **Settings → General → Memory → Stop idle servers**): a dev server or preview
+  with no connection from outside and no output for the chosen time is stopped, with a notification.
 - A notification subsystem failure can never take the app down — supervision is crash-proof.
 
 ## Logs
