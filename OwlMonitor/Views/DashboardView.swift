@@ -19,7 +19,6 @@ struct DashboardView: View {
                 UncommittedDiffStat(project: project)
                 Spacer()
             }
-            Divider()
             // One play/stop pill per run-control the project has — dev, worker, build, preview, … —
             // all from AppState.runControls(for:), so a new process type appears here automatically.
             HStack(spacing: 10) {
