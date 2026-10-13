@@ -57,6 +57,7 @@ struct GlobalTerminalView: View {
                     }
                 }
                 .padding(.horizontal, 2).padding(.vertical, 1)
+                .background(HideScrollers())
                 // Tabs pop in and out as servers start and stop; the selection capsule slides to the
                 // chosen tab (dropped under Reduce Motion, where it simply moves).
                 .animation(Motion.state(reduceMotion), value: tabs.map(\.id))
@@ -260,6 +261,23 @@ struct GlobalTerminalView: View {
             }
             if let r = argv.range(of: "-c ") { return String(argv[r.upperBound...]) }
             return argv.isEmpty ? "(no command captured)" : argv
+        }
+    }
+}
+
+/// Removes the scroll bars of the `NSScrollView` this view sits inside. `.scrollIndicators(.hidden)`
+/// isn't honoured on macOS while a mouse is connected (the system then shows legacy scrollers
+/// "automatically"), so the tab strip grew a fat horizontal bar whenever many processes had tabs.
+/// Scrolling by trackpad or wheel is unaffected; only the bar goes. Put it INSIDE the scroll content,
+/// where `enclosingScrollView` can find it.
+private struct HideScrollers: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { NSView() }
+    func updateNSView(_ view: NSView, context: Context) {
+        // The view isn't in the hierarchy yet during the first pass — look on the next turn.
+        DispatchQueue.main.async {
+            guard let scroll = view.enclosingScrollView else { return }
+            scroll.hasHorizontalScroller = false
+            scroll.hasVerticalScroller = false
         }
     }
 }
