@@ -267,6 +267,15 @@ int dm_session_pids(pid_t sid, pid_t *out, int cap) {
     return w;
 }
 
+int dm_memory_pressure_level(void) {
+    int level = 0;
+    size_t len = sizeof(level);
+    if (sysctlbyname("kern.memorystatus_vm_pressure_level", &level, &len, NULL, 0) != 0) {
+        return 0;
+    }
+    return level;
+}
+
 double dm_load_avg(void) {
     double avg[3];
     if (getloadavg(avg, 3) < 0) {
@@ -311,6 +320,20 @@ int dm_responsible_pid(pid_t pid) {
     return r > 0 ? (int)r : -1;
 }
 
+int dm_proc_cwd(pid_t pid, char *buf, int size) {
+    if (size <= 0) return -1;
+    buf[0] = '\0';
+    struct proc_vnodepathinfo vpi;
+    int r = proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &vpi, sizeof(vpi));
+    if (r < (int)sizeof(vpi)) return -1;
+    size_t n = strlen(vpi.pvi_cdir.vip_path);
+    if (n == 0) return -1;
+    if ((int)n > size - 1) n = (size_t)(size - 1);
+    memcpy(buf, vpi.pvi_cdir.vip_path, n);
+    buf[n] = '\0';
+    return (int)n;
+}
+
 // 1 if the process's executable lives under a macOS system location (Apple daemons, system
 // frameworks, bundled system apps, privileged helpers), else 0. Used to badge system/background
 // processes distinctly from user apps in the process table.
@@ -329,26 +352,45 @@ int dm_proc_is_system(pid_t pid) {
     return 0;
 }
 
+// A per-thread KERN_PROCARGS2 buffer, sized to kern.argmax (1 MB) once and reused. Both readers
+// below used to malloc and free a fresh argmax-sized block on every call — an mmap/munmap pair per
+// process read, which dominated a full scan of launchd's children. Per-thread, so the sampler and
+// the orphan scan (different threads) never share one. Returns NULL / 0 if it can't be set up.
+static char *dm_procargs_buffer(size_t *size) {
+    static int argmax = 0;
+    static __thread char *buf = NULL;
+    if (argmax <= 0) {
+        int value = 0;
+        size_t sz = sizeof(value);
+        int mib_max[2] = { CTL_KERN, KERN_ARGMAX };
+        if (sysctl(mib_max, 2, &value, &sz, NULL, 0) != 0 || value <= 0) return NULL;
+        argmax = value;
+    }
+    if (buf == NULL) buf = (char *)malloc((size_t)argmax);
+    *size = (size_t)argmax;
+    return buf;
+}
+
+uint64_t dm_proc_start_time(pid_t pid) {
+    struct proc_bsdinfo info;
+    int r = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info));
+    if (r < (int)sizeof(info)) return 0;
+    return (uint64_t)info.pbi_start_tvsec * 1000000ULL + (uint64_t)info.pbi_start_tvusec;
+}
+
 int dm_proc_env_value(pid_t pid, const char *key, char *buf, int size) {
     if (size <= 0 || key == NULL) {
         return -1;
     }
     buf[0] = '\0';
 
-    int argmax = 0;
-    size_t sz = sizeof(argmax);
-    int mib_max[2] = { CTL_KERN, KERN_ARGMAX };
-    if (sysctl(mib_max, 2, &argmax, &sz, NULL, 0) != 0 || argmax <= 0) {
-        return -1;
-    }
-    char *procargs = (char *)malloc((size_t)argmax);
+    size_t len = 0;
+    char *procargs = dm_procargs_buffer(&len);
     if (procargs == NULL) {
         return -1;
     }
     int mib[3] = { CTL_KERN, KERN_PROCARGS2, (int)pid };
-    size_t len = (size_t)argmax;
     if (sysctl(mib, 3, procargs, &len, NULL, 0) != 0 || len < sizeof(int)) {
-        free(procargs);
         return -1;
     }
 
@@ -389,7 +431,6 @@ int dm_proc_env_value(pid_t pid, const char *key, char *buf, int size) {
         }
         cp++;
     }
-    free(procargs);
     // No variables at all: macOS strips the environment of Apple platform binaries (sh, make, sleep…)
     // from KERN_PROCARGS2 even for the same user, so "absent" can't be told from "hidden" here —
     // report it apart, so a caller can look for the tag elsewhere (see OrphanReaper).
@@ -403,22 +444,14 @@ int dm_proc_args(pid_t pid, char *buf, int size) {
     }
     buf[0] = '\0';
 
-    int argmax = 0;
-    size_t sz = sizeof(argmax);
-    int mib_max[2] = { CTL_KERN, KERN_ARGMAX };
-    if (sysctl(mib_max, 2, &argmax, &sz, NULL, 0) != 0 || argmax <= 0) {
-        return 0;
-    }
-
-    char *procargs = (char *)malloc((size_t)argmax);
+    size_t len = 0;
+    char *procargs = dm_procargs_buffer(&len);
     if (procargs == NULL) {
         return 0;
     }
 
     int mib[3] = { CTL_KERN, KERN_PROCARGS2, (int)pid };
-    size_t len = (size_t)argmax;
     if (sysctl(mib, 3, procargs, &len, NULL, 0) != 0 || len < sizeof(int)) {
-        free(procargs);
         return 0;
     }
 
@@ -436,7 +469,6 @@ int dm_proc_args(pid_t pid, char *buf, int size) {
         else { buf[written++] = c; }
     }
     buf[written] = '\0';
-    free(procargs);
     return written;
 }
 

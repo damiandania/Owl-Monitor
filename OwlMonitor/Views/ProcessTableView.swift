@@ -24,6 +24,9 @@ struct ProcessTableView: View {
                                        memText: memText(row.memBytes),
                                        cpuWidth: cpuWidth, memWidth: memWidth,
                                        onKill: { app.killProcessRow(row) })
+                            // Compared on what it draws (see `==`): a tick re-renders only the rows
+                            // whose figures changed, not the whole list.
+                            .equatable()
                     }
                 }
                 .padding(.vertical, 5)
@@ -72,7 +75,7 @@ struct ProcessTableView: View {
 
 /// A single process row: icon + name on the left, CPU/Memory right-aligned. Supervised servers,
 /// external dev servers and builds get a tinted background and a colored name so they stand out.
-private struct ProcessRowView: View {
+private struct ProcessRowView: View, Equatable {
     let row: ProcessRow
     let cpuText: String
     let cpuColor: Color
@@ -80,6 +83,19 @@ private struct ProcessRowView: View {
     let cpuWidth: CGFloat
     let memWidth: CGFloat
     let onKill: () -> Void
+
+    /// Equal when it would draw the same. `onKill` is left out: a closure is never equal to another,
+    /// which made every row re-render on every sampler tick. It only captures the row's pid, which
+    /// `row.id` already compares.
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        a.row.id == b.row.id && a.row.name == b.row.name && a.cpuText == b.cpuText
+            && a.cpuColor == b.cpuColor && a.memText == b.memText
+            && a.row.isDevServer == b.row.isDevServer && a.row.isBuild == b.row.isBuild
+            && a.row.isWorker == b.row.isWorker && a.row.isExternalDev == b.row.isExternalDev
+            && a.row.isExternalBuild == b.row.isExternalBuild && a.row.isExtension == b.row.isExtension
+            && a.row.isClaude == b.row.isClaude && a.row.isPreview == b.row.isPreview
+            && a.row.isSystem == b.row.isSystem
+    }
 
     @State private var hovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion

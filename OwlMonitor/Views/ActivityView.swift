@@ -5,10 +5,14 @@ import SwiftUI
 struct ActivityView: View {
     @Environment(AppState.self) private var app
     @State private var percentOfMachine = false
-    /// Collapsed by default: the card shows just the meters until the user expands the process list.
-    @State private var expanded = false
+    /// Open by default: the process list is the point of this card. Still collapsible per session.
+    @State private var expanded = true
     /// The timeline-charts accordion, sibling to the process list. Ephemeral like `expanded`.
     @State private var chartsExpanded = false
+    /// Height of the process list, set by dragging the handle under it. Remembered across launches.
+    @AppStorage("processListHeight") private var listHeight: Double = Self.defaultListHeight
+    static let defaultListHeight: Double = 240
+    static let listHeightRange: ClosedRange<Double> = 120...640
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -49,10 +53,17 @@ struct ActivityView: View {
                             .transition(.opacity)
                     }
                 }
-                .frame(height: expanded ? 240 : 0)
+                .frame(height: expanded ? CGFloat(listHeight) : 0)
                 .padding(.top, expanded ? 10 : 0)
                 .clipped()
                 .accessibilityHidden(!expanded)
+                // The divider between this list and the terminal below: drag to resize the list (and,
+                // with it, how much room the terminal gets). Double-click restores the default.
+                if expanded {
+                    ResizeHandle(height: $listHeight, range: Self.listHeightRange,
+                                 defaultHeight: Self.defaultListHeight)
+                        .transition(.opacity)
+                }
             }
         }
         .dmCard()
@@ -241,5 +252,49 @@ private struct MeterBar: View {
             }
         }
         .frame(height: 6)
+    }
+}
+
+/// A horizontal divider you drag up or down to change a height. The line is a hairline with a small
+/// grip centred on it; the hit area is taller than it looks so it's easy to catch, and the cursor
+/// turns into the vertical-resize arrows over it.
+private struct ResizeHandle: View {
+    @Binding var height: Double
+    let range: ClosedRange<Double>
+    let defaultHeight: Double
+    /// The height when the drag began — the translation is applied to THIS, not accumulated, so the
+    /// handle tracks the pointer exactly however many updates arrive.
+    @State private var startHeight: Double?
+    @State private var hovering = false
+
+    var body: some View {
+        ZStack {
+            Rectangle().fill(.separator).frame(height: 1)
+            Capsule().fill(.secondary.opacity(hovering || startHeight != nil ? 0.9 : 0.45))
+                .frame(width: 36, height: 4)
+        }
+        .frame(height: 16)
+        .padding(.top, 6)
+        .contentShape(Rectangle())
+        .onHover { inside in
+            hovering = inside
+            if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                .onChanged { value in
+                    let start = startHeight ?? height
+                    startHeight = start
+                    height = min(max(start + value.translation.height, range.lowerBound), range.upperBound)
+                }
+                .onEnded { _ in startHeight = nil }
+        )
+        .onTapGesture(count: 2) { height = defaultHeight }
+        .help("Drag to resize the process list — double-click to reset")
+        .accessibilityLabel("Resize process list")
+        .accessibilityAdjustableAction { direction in
+            let step = 40.0
+            height = min(max(height + (direction == .increment ? step : -step), range.lowerBound), range.upperBound)
+        }
     }
 }

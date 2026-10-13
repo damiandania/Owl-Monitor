@@ -86,6 +86,14 @@ struct ProjectSidebar: View {
         // Cross-fades the dot's colour (orange → green) and runs its enter/exit transition.
         .animation(Motion.state(reduceMotion), value: app.session(for: project)?.state)
         .padding(.leading, 14)   // indent under the folder header (DisclosureGroup used to do this)
+        // Double-click starts the project's server, and again stops it — the same toggle as the Dev
+        // button. `simultaneousGesture`, so the single click still selects the row immediately
+        // instead of waiting to see whether a second one follows.
+        .contentShape(Rectangle())
+        .simultaneousGesture(TapGesture(count: 2).onEnded {
+            if app.session(for: project)?.state.isActive == true { app.stop(project) } else { app.launch(project) }
+        })
+        .help("Double-click to start or stop the server")
         .tag(project.id)
         .contextMenu {
             Button("Remove", role: .destructive) { app.removeProject(project.id) }

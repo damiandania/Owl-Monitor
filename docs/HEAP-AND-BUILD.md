@@ -10,7 +10,7 @@ take you to the code.
 ## 1. The problem it solves
 
 A Node dev server or production build crashes with a *JavaScript heap out of memory* (V8 exit code
-6) when its heap is too small. The right heap depends on the project and isn't known up front. Dev
+6) when its heap is too small. The right heap depends on the project and isn't known up front. Owl
 Monitor handles this automatically: it **starts small, climbs on OOM, and remembers** the level that
 worked — separately for the dev server and the build.
 
@@ -40,15 +40,49 @@ for the server, `BuildRunner.start` for the build.
 > **The dev server and the build are independent.** A heavy production build can sit at 8 GB while
 > the dev server stays at 4 — they never share a value.
 
+### The shared-RAM budget (dev server and preview only)
+
+`--max-old-space-size` is a *ceiling*, not a reservation, but V8 lets a heap grow lazily all the way
+to it before collecting hard. Three servers at the usual 4 GB add up to 12 GB of ceilings on an 8 GB
+Mac, so macOS swaps long before any one of them feels pressure. In **auto** mode (and with
+**Settings → General → Memory → Share RAM between servers** on, the default) each launch therefore
+gets an even share of what is left after a macOS reserve — `AppState.launchHeapGB` →
+`MemoryGuard.budgetedHeapGB`:
+
+```
+reserve = max(3 GB, RAM / 4)                      # 3 GB on an 8 GB Mac
+share   = round( (RAM − reserve) / (otherRunningServers + 1) )
+launch  = max( floor,  min( learnedLevel, share ) )
+```
+
+| 8 GB Mac | servers running | each launch gets |
+|---|---|---|
+| alone | 0 others | 4 GB (its learned level) |
+| two | 1 other | 3 GB |
+| three | 2 others | 2 GB |
+
+- It only ever **lowers** a heap — never above the learned level, never below the **floor**.
+- The floor is what the project has *proven* it needs: `Project.heapFloorGB`, set by
+  `AppState.recordHeapEscalation` whenever the OOM autoscaler climbs (`Project.devHeapFloorGB` /
+  `previewHeapFloorGB` also treat an already-climbed learned level as proof). An OOM at 3 GB
+  therefore raises the floor to the next rung, and the budget can't squeeze it back.
+- Manual heaps, and **builds**, are never budgeted — a build runs with the other servers paused.
+- A preview runs on the build level (see above) and is budgeted against the build floor.
+- `owl-monitor up` / `preview` report the heap the server actually got
+  (`DevSession.lastMemoryGB`) and say when it was trimmed
+  (`— shared: trimmed from 4 GB so the servers running fit 8 GB RAM`).
+
 ---
 
 ## 3. The autoscaler — 4 → 6 → 8
 
 All scaling policy lives in one place: **`HeapScaling`** (`Core/HeapScaling.swift`).
 
-- **Ladder:** `steps = [4, 6, 8]`. A project with no learned level yet starts at `firstGB = 4`.
+- **Ladder:** `steps = [4, 6, 8, 12, 16, 24]`, clamped to physical RAM — so on an 8 GB Mac it is
+  4 → 6 → 8, while a bigger Mac keeps climbing. A project with no learned level yet starts at
+  `firstGB = 4`.
 - **`next(after:systemGB:)`** → the next step above the current heap that still fits physical RAM
-  (ceiling = `min(8, RAM)`), or `nil` at the top.
+  (ceiling = `min(24, RAM)`), or `nil` at the top.
 - **`looksLikeOOM(logLines:exitCode:)`** → `true` if the exit code is 6 (V8 `FatalProcessOutOfMemory`)
   **or** the tail of the log contains a heap message (`heap out of memory`, `javascript heap`,
   `reached heap limit`, `allocation failed`). Robust to the exit code, which varies (SIGABRT 134,
@@ -58,7 +92,8 @@ All scaling policy lives in one place: **`HeapScaling`** (`Core/HeapScaling.swif
 On process exit, if it `looksLikeOOM` and there's a higher step, the session relaunches with that
 step (`biggerHeap()` → `HeapScaling.next`). Each OOM climbs one rung; at 8 GB there's no higher rung,
 so it falls through to the normal crash path. **In auto mode the new level is persisted** via the
-`onHeapEscalated` callback → `AppState.setAutoHeapGB` → `projects.json`. The log is cleared on each
+`onHeapEscalated` callback → `AppState.recordHeapEscalation` (learned level **and** the budget
+floor) → `projects.json`. The log is cleared on each
 relaunch, so a stale OOM message can't trigger a second climb — only a *fresh* OOM does.
 
 ### Build (`AppState.runBuildAndWait`)
@@ -84,14 +119,23 @@ UI Build button) just kicks off this same loop in a `Task`.
 8 GB is marginal for a heavy build (the final Nitro prerender spawns a *second* Node process), and
 the kernel jetsams (SIGKILLs) the build once **swap** fills up. So besides pausing the dev servers,
 the build also:
-1. **`purge`s** inactive/cached system memory before starting (`AppState.purgeSystemMemory`, macOS
-   `/usr/sbin/purge`) — and again mid-build whenever pressure is high.
-2. **Surfaces the resource advisor** (`evaluatePressure`) so the heaviest non-essential apps can be
-   closed (user-confirmed, never automatic), and auto-closes orphaned dev processes.
-3. **Watches memory pressure during the build** (a Task polling `systemMemPercent`): above ~85 %
-   used it re-`purge`s and re-runs the advisor, acting **before** the kernel jetsams the build.
-4. Injects **`--optimize-for-size`** into the build's `NODE_OPTIONS` so V8 favours footprint over
-   speed (fewer SIGKILLs, slightly slower build).
+1. **Surfaces the resource advisor** (`PressureManager.evaluate`) so the heaviest non-essential apps
+   can be closed (user-confirmed, never automatic), and auto-closes orphaned dev processes.
+2. **Watches memory pressure during the build** (a Task polling `systemMemPercent` every 5 s): above
+   ~85 % used it re-runs the advisor, acting **before** the kernel jetsams the build. Claude's part
+   of that is throttled to once per 3 minutes inside `PressureManager`.
+3. **Sweeps what the build leaves behind** when it ends (`BuildRunner.finish` →
+   `ProcessSupport.gracefulKillTree`): bundler workers and services (esbuild, Turbopack, a Next.js
+   build worker) can outlive the build's leader, and a leftover one holds the RAM the relaunched dev
+   server needs.
+
+> **What was removed, and why.** Builds used to `purge` the system memory cache and inject
+> `--optimize-for-size`. Neither ever worked: `/usr/sbin/purge` (like `memory_pressure -S`) needs
+> root and exits "Operation not permitted" for a normal app, so it only spawned a failing process;
+> and V8 flags such as `--optimize-for-size` are **rejected** in `NODE_OPTIONS` ("not allowed in
+> NODE_OPTIONS") and make Node exit immediately (code 9), failing every build. Only
+> `--max-old-space-size` is injected. A user-level app can't make macOS drop its caches — the real
+> levers are stopping processes (the paused servers, the advisor) and the shared-RAM budget above.
 
 > **"Remembers the level that worked."** Because each climb is persisted *before* the retry, the
 > learned level only ever goes up, and the next launch/build starts there instead of replaying the
@@ -113,8 +157,9 @@ default by **inheriting the dev config** of an existing project (`buildMemoryGB 
 `buildMemoryAuto ?? memoryAuto`) — so a project the user already tuned keeps that heap for the build
 too — and the learned levels default to `firstGB` (4).
 
-`persist()` is called on every change: the settings UI setters, the IPC `--gb` override, and — the
-new part — each autoscaler climb (`setAutoHeapGB` / `setBuildAutoHeapGB`).
+`persist()` is called on every change: the settings UI setters, the IPC `--gb` override, and each
+autoscaler climb (`recordHeapEscalation` for the dev server, `setBuildAutoHeapGB` for the build).
+`heapFloorGB` is optional and absent from older files (decoded as `nil`).
 
 ---
 
@@ -153,7 +198,14 @@ server on a fresh app launch still finds `node` (no `exit 127`).
 
 Each row is the shared `row(...)` helper: an **Auto** toggle on the right; when Auto is on it shows
 the effective GB (the learned level), when off a manual GB picker. Bindings go through
-`AppState.setBuildMemoryAuto` / `setBuildMemoryGB`.
+`AppState.setBuildMemoryAuto` / `setBuildMemoryGB`. The row shows the *learned* level; what a launch
+actually gets can be lower while other servers run (see the shared-RAM budget).
+
+**Settings → General → Memory** holds the app-wide switches: the default heap for new projects,
+**Share RAM between servers** (`AppSettings.shareHeapBudget`, on by default — its caption works out the
+numbers for this Mac) and **Stop idle servers** (`AppSettings.idleStopMinutes`: never / 15 / 30 / 60 /
+120 min; off by default). Idle means no connection from outside and no output — see
+`AppState+Memory.checkIdleServers` in ARCHITECTURE.md.
 
 ---
 
@@ -174,8 +226,10 @@ the effective GB (the learned level), when off a manual GB picker. Bindings go t
 
 | File | Role |
 |------|------|
-| `OwlMonitor/Core/HeapScaling.swift` | The ladder (4→6→8) + OOM detection. Single source of policy. |
-| `OwlMonitor/Model/Project.swift` | The heap fields, Codable retro-compat, `effectiveMemoryGB` / `effectiveBuildMemoryGB`. |
+| `OwlMonitor/Core/HeapScaling.swift` | The ladder (4→6→8→…, clamped to RAM) + OOM detection. Single source of policy. |
+| `OwlMonitor/Core/MemoryGuard.swift` | Pure memory policy: `budgetedHeapGB` / `reservedGB`, `isIdle`, probe-echo matching, launch/swap warnings. |
+| `OwlMonitor/App/AppState+Memory.swift` | `launchHeapGB` (applies the budget at launch), idle auto-stop, the "Stop Other Servers" notification action. |
+| `OwlMonitor/Model/Project.swift` | The heap fields (incl. `heapFloorGB`), Codable retro-compat, `effectiveMemoryGB` / `effectiveBuildMemoryGB`, the floors. |
 | `OwlMonitor/Core/DevSession.swift` | Dev-server launch + OOM relaunch (`biggerHeap`, `onHeapEscalated`). |
 | `OwlMonitor/Core/BuildRunner.swift` | One-shot build process; injects the heap, captures exit code + log. |
 | `OwlMonitor/App/AppState.swift` | `launch`, `runBuild`/`runBuildAndWait` (build retry loop), the setters that persist. |

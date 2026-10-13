@@ -54,6 +54,12 @@ int dm_session_pids(pid_t sid, pid_t *out, int cap);
 /// 1-minute load average, or -1 on error.
 double dm_load_avg(void);
 
+/// The kernel's own memory-pressure level — the signal behind Activity Monitor's memory-pressure
+/// graph: 1 = normal (green), 2 = warning (yellow), 4 = critical (red). 0 if it can't be read.
+/// Unlike "used %" it knows that compressed and cached pages are reclaimable, so an 8 GB Mac sitting
+/// at 90 % used with some swap left over from an earlier peak still reads normal.
+int dm_memory_pressure_level(void);
+
 /// Fills `out` (capacity `cap`) with every pid on the system. Returns count written.
 int dm_all_pids(pid_t *out, int cap);
 
@@ -80,6 +86,11 @@ int dm_proc_args(pid_t pid, char *buf, int size);
 // -2 when the process shows no environment at all: macOS hides it for Apple platform binaries.
 int dm_proc_env_value(pid_t pid, const char *key, char *buf, int size);
 
+/// When `pid` started, in microseconds since the epoch, or 0 if unreadable. With the pid it names one
+/// process for good — a pid is reused, a (pid, start time) pair never is — so a verdict about a
+/// process can be cached safely.
+uint64_t dm_proc_start_time(pid_t pid);
+
 /// How many TCP connections the process tree `tree` (`ntree` pids) has ACCEPTED from OUTSIDE and still
 /// holds open: established sockets on a port the tree listens on (a browser tab's page load or HMR
 /// websocket) whose other end isn't another process of the same tree (a bundler talking to its own
@@ -87,6 +98,11 @@ int dm_proc_env_value(pid_t pid, const char *key, char *buf, int size);
 /// connection open to every server; 0 excludes nothing). The tree's own outbound connections never
 /// count. Drives idle auto-stop — a server nobody is connected to is one nobody is using.
 int dm_tree_inbound_count(const pid_t *tree, int ntree, pid_t exclude_peer);
+
+/// The process's current working directory, copied into `buf` (NUL-terminated). Returns its length,
+/// or -1 if unreadable. Tells apart processes whose argv is useless (`claude` and `node` rewrite
+/// their own title to the bare word) by the project they are running in.
+int dm_proc_cwd(pid_t pid, char *buf, int size);
 
 /// The TCP port a process is LISTENing on (e.g. a dev server's port), or 0 if none.
 /// Used to identify a dev server started outside the app (e.g. "MiddleSpace :3001").

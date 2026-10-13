@@ -116,9 +116,14 @@ orphanSession("\(key)=\(directID.uuidString):preview exec \(me) --sleep-child 42
 // (b) The root is an Apple binary whose environment macOS hides — npm's `sh -c` child outliving
 //     npm — with the tagged process one level down.
 orphanSession("/bin/sh -c '\(key)=\(shellID.uuidString):dev \(me) --sleep-child 43; :'")
-usleep(400_000)
-
-let scan = OrphanReaper.scan(supervised: [])
+// Wait (bounded) until both orphans are visible rather than sleeping a fixed time: how long the
+// reparenting to launchd takes depends on machine load (this suite is run on a busy 8 GB Mac and in CI).
+var scan: [OrphanReaper.Orphan] = []
+for _ in 0..<50 {
+    scan = OrphanReaper.scan(supervised: [])
+    if scan.contains(where: { $0.projectID == directID }) && scan.contains(where: { $0.projectID == shellID }) { break }
+    usleep(100_000)
+}
 // Only ever act on THIS test's orphans — never a real one on the machine running the suite.
 let direct = scan.filter { $0.projectID == directID }
 let viaShell = scan.filter { $0.projectID == shellID }
@@ -133,7 +138,7 @@ chk(OrphanReaper.scan(supervised: [OrphanReaper.key(projectID: directID, kind: "
 
 let sleeperOfShell = viaShell.flatMap { ProcessTree.fullTree(of: $0.pid) }   // sh + its tagged child
 OrphanReaper.reap(direct + viaShell)
-usleep(600_000)
+for _ in 0..<60 where (direct + viaShell).map(\.pid).contains(where: alive) || sleeperOfShell.contains(where: alive) { usleep(100_000) }
 chk(!(direct + viaShell).map(\.pid).contains(where: alive), "reaper: reap kills each orphan root")
 chk(sleeperOfShell.count >= 2 && !sleeperOfShell.contains(where: alive),
     "reaper: …and the whole tree under it", "\(sleeperOfShell)")
