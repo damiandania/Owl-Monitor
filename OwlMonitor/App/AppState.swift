@@ -310,6 +310,7 @@ final class AppState {
         // Persist the heap level the OOM autoscaler learns (AUTO mode), so the next launch starts
         // there instead of replaying 4→6→8 — and as the floor the shared-memory budget respects.
         session.onHeapEscalated = { [weak self] gb in self?.recordHeapEscalation(gb, for: project.id) }
+        session.onLaunchMeasured = { [weak self] s in self?.setLastLaunchSeconds(s, preview: false, for: project.id) }
         sessions[project.id] = session
         let heapGB = launchHeapGB(for: project, preview: false)
         session.start(memoryGB: heapGB, reservedPorts: reservedPorts(excluding: project.id))
@@ -564,6 +565,7 @@ final class AppState {
         stopSiblings(of: "preview", for: project)   // only one of dev/build/preview runs per project
         let preview = DevSession(project: project, commandOverride: cmd)
         previews[project.id] = preview
+        preview.onLaunchMeasured = { [weak self] s in self?.setLastLaunchSeconds(s, preview: true, for: project.id) }
         let heapGB = launchHeapGB(for: project, preview: true)
         preview.start(memoryGB: heapGB, reservedPorts: reservedPorts(excluding: project.id))
         warnLowMemory(heapGB: heapGB, name: "\(project.name) · preview", projectID: project.id)

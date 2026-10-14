@@ -107,6 +107,10 @@ owl-monitor stop <path> --force     # close everything Owl Monitor runs for the 
   unexpectedly, the next launch finds the trees it left running, stops them and starts them again under
   supervision (a notification says which); a 30 s sweep catches stragglers. A leader that dies first has
   its children swept at once. Untagged processes — a server you started yourself — are never touched.
+- **Launch progress**: Owl Monitor times each launch (from *Launching…* to the first successful health probe) and keeps the last one per project
+  (`lastLaunchSeconds`; the production preview has its own). While a server is *Launching…*, `status --json` carries `launchElapsed` and
+  `launchETA` — the expected TOTAL, like `buildETA` — so a client can draw progress as `elapsed / ETA`. `launchETA` is null on a first launch;
+  both are absent in every other state, including *Recycling…*.
 - **Idle servers** (opt-in, **Settings → General → Memory → Stop idle servers**): a dev server or preview
   with no connection from outside and no output for the chosen time is stopped, with a notification.
 - A notification subsystem failure can never take the app down — supervision is crash-proof.

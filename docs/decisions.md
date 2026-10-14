@@ -99,6 +99,10 @@ with the decisions of PRs #3–#5.
 - **2026-10-14 — The notch's provider lives in `AppState`.** `shownQuotaSource` is the one source of truth for clicking the
   notch and `quota show|toggle`; the notch controller only redraws on `quotaSourceDidChange`. It was a private field of the
   controller, so nothing outside the view could read or set it. Still session-only (not persisted), as before.
+- **2026-10-14 — A launch is timed to the first HTTP probe that answers, and only then.** A launch that crashes, is stopped, or
+  is merely "assumed up" by the warm-up fallback records nothing, so a failed launch can't poison the ETA. Dev and preview are
+  stored separately (`lastLaunchSeconds`, `lastPreviewLaunchSeconds`). `launchElapsed` exists only while *Launching…*: during a
+  *Recycling…* back-off no launch is under way yet.
 - **2026-10-14 — Force-close reaps by ownership tag only.** `stop --force` drops the project's runners (so it reads
   Idle and leaves the notch) and reaps tagged leftovers of that project; it never goes by folder or command line, so
   editors, terminals and Claude sessions there are safe. It is not `remove`.

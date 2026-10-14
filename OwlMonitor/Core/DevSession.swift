@@ -26,6 +26,17 @@ final class DevSession {
     /// Fired when the OOM autoscaler bumps the heap, with the new GB level. AppState persists it to
     /// the project (`autoHeapGB`) so the next launch starts there. Only invoked in AUTO mode.
     var onHeapEscalated: (@MainActor (Int) -> Void)?
+    /// Fired once per launch, with the seconds from `start()` to the FIRST successful health probe —
+    /// AppState persists it as the ETA for the next launch. Not fired when the launch never answered
+    /// (a crash, a stop, or the warm-up fallback that merely assumes the server is up).
+    var onLaunchMeasured: (@MainActor (TimeInterval) -> Void)?
+
+    /// Seconds since this launch began, while it is still launching (nil otherwise — including during
+    /// the back-off of a "Recycling…", which has no launch under way yet).
+    var launchElapsed: TimeInterval? {
+        guard case .launching = state, let startedAt else { return nil }
+        return Date().timeIntervalSince(startedAt)
+    }
 
     private let maxLogLines = 2000
     private let trimSlack = 200
@@ -669,7 +680,10 @@ final class DevSession {
                     if self.stableProbes >= self.stableProbesToReset {
                         self.crashRestarts = 0
                     }
-                    if firstTime { self.append(line: "ok: server is responding on :\(port)") }
+                    if firstTime {
+                        self.append(line: "ok: server is responding on :\(port)")
+                        if let began = self.startedAt { self.onLaunchMeasured?(Date().timeIntervalSince(began)) }
+                    }
                     if recovering {
                         self.append(line: "ok: health recovered")
                         self.onEvent?(.recovered(project: self.project.name))

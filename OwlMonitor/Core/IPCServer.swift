@@ -301,6 +301,10 @@ final class IPCServer {
         info.pid = (active?.pid).flatMap { $0 > 0 ? Int($0) : nil }
         info.exitCode = (active?.lastExitCode).map { Int($0) }
         info.lastError = active?.lastError
+        if let active, let elapsed = active.launchElapsed {
+            info.launchElapsed = elapsed
+            info.launchETA = active === preview ? p.lastPreviewLaunchSeconds : p.lastLaunchSeconds
+        }
         if building {
             info.building = true
             info.buildElapsed = build?.startedAt.map { Date().timeIntervalSince($0) }

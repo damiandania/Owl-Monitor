@@ -98,6 +98,11 @@ struct Project: Identifiable, Codable, Hashable, Sendable {
     /// relaunch or reinstall instead of running blind until the session's first build finishes. `nil`
     /// until the first successful build.
     var lastBuildSeconds: TimeInterval?
+    /// How long the last dev-server launch took to answer its first health probe (launching → ready),
+    /// in seconds — learned and persisted like `lastBuildSeconds`, the ETA for the next launch's progress
+    /// ring. nil until the first launch that reached ready. The production preview has its own.
+    var lastLaunchSeconds: TimeInterval?
+    var lastPreviewLaunchSeconds: TimeInterval?
     /// The smallest dev-server heap (GB) this project has PROVEN it needs: set whenever the OOM
     /// autoscaler escalates, so the shared-memory budget (`MemoryGuard.budgetedHeapGB`) never squeezes
     /// it back below a level it already ran out of memory at. nil until the first out-of-memory.
@@ -136,6 +141,8 @@ struct Project: Identifiable, Codable, Hashable, Sendable {
         buildMemoryAuto: Bool = true,
         buildAutoHeapGB: Int = HeapScaling.firstGB,
         lastBuildSeconds: TimeInterval? = nil,
+        lastLaunchSeconds: TimeInterval? = nil,
+        lastPreviewLaunchSeconds: TimeInterval? = nil,
         heapFloorGB: Int? = nil,
         env: [EnvVar] = []
     ) {
@@ -159,6 +166,8 @@ struct Project: Identifiable, Codable, Hashable, Sendable {
         self.buildMemoryAuto = buildMemoryAuto
         self.buildAutoHeapGB = buildAutoHeapGB
         self.lastBuildSeconds = lastBuildSeconds
+        self.lastLaunchSeconds = lastLaunchSeconds
+        self.lastPreviewLaunchSeconds = lastPreviewLaunchSeconds
         self.heapFloorGB = heapFloorGB
         self.env = env
     }
@@ -169,7 +178,7 @@ struct Project: Identifiable, Codable, Hashable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, name, path, groupRoot, packageManager, framework, devCommand, buildCommand, workerCommand, previewCommand
         case memoryGB, memoryAuto, port, healthPath, packageManagerAuto
-        case autoHeapGB, buildMemoryGB, buildMemoryAuto, buildAutoHeapGB, lastBuildSeconds, heapFloorGB, env
+        case autoHeapGB, buildMemoryGB, buildMemoryAuto, buildAutoHeapGB, lastBuildSeconds, lastLaunchSeconds, lastPreviewLaunchSeconds, heapFloorGB, env
     }
 
     init(from decoder: Decoder) throws {
@@ -197,6 +206,8 @@ struct Project: Identifiable, Codable, Hashable, Sendable {
         buildMemoryAuto = try c.decodeIfPresent(Bool.self, forKey: .buildMemoryAuto) ?? memoryAuto
         buildAutoHeapGB = try c.decodeIfPresent(Int.self, forKey: .buildAutoHeapGB) ?? HeapScaling.firstGB
         lastBuildSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .lastBuildSeconds)
+        lastLaunchSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .lastLaunchSeconds)
+        lastPreviewLaunchSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .lastPreviewLaunchSeconds)
         heapFloorGB = try c.decodeIfPresent(Int.self, forKey: .heapFloorGB)
         env = try c.decodeIfPresent([EnvVar].self, forKey: .env) ?? []
     }

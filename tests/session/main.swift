@@ -16,9 +16,18 @@ func runSessionTests() async -> Int {
         memoryGB: 2
     )
     let session = DevSession(project: project)
+    var measured: [TimeInterval] = []
+    session.onLaunchMeasured = { measured.append($0) }
     session.start(memoryGB: 2)
+    // While it launches, the elapsed time is available and counts up.
+    try? await Task.sleep(for: .milliseconds(300))
+    check("launch: launchElapsed while launching", (session.launchElapsed ?? -1) > 0.2 && session.launchElapsed! < 3,
+          "elapsed=\(session.launchElapsed.map { String(format: "%.2f", $0) } ?? "nil")")
 
     try? await Task.sleep(for: .seconds(5))
+    check("launch: measured exactly once, at the first health probe", measured.count == 1 && measured[0] > 0.3 && measured[0] < 5,
+          "measured=\(measured)")
+    check("launch: no launchElapsed once running", session.launchElapsed == nil)
 
     check("port parsed", session.detectedPort == 4321, "port=\(String(describing: session.detectedPort))")
     let running: Bool = { if case .running = session.state { return true }; return false }()

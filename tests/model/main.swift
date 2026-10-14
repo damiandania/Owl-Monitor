@@ -88,6 +88,16 @@ climbed.heapFloorGB = 4
 chk(climbed.devHeapFloorGB == 4, "floor: an explicit proven floor wins")
 chk(Project(name: "p", path: "/tmp/p", buildAutoHeapGB: 8).previewHeapFloorGB == 8
     && Project(name: "p", path: "/tmp/p").previewHeapFloorGB == Project.minHeapGB, "floor: preview follows the build level")
+// Launch durations: absent in older projects.json, and they round-trip.
+chk(noFloor.lastLaunchSeconds == nil && noFloor.lastPreviewLaunchSeconds == nil, "launch time: absent → nil")
+var timed = Project(name: "t", path: "/tmp/t", lastLaunchSeconds: 12.5, lastPreviewLaunchSeconds: 3.25)
+if let d = try? JSONEncoder().encode(timed), let b = try? dec.decode(Project.self, from: d) {
+    chk(b.lastLaunchSeconds == 12.5 && b.lastPreviewLaunchSeconds == 3.25, "launch time: round-trips through projects.json")
+} else { chk(false, "launch time: round-trips") }
+timed.lastLaunchSeconds = nil
+if let d = try? JSONEncoder().encode(timed), let b = try? dec.decode(Project.self, from: d) {
+    chk(b.lastLaunchSeconds == nil && b.lastPreviewLaunchSeconds == 3.25, "launch time: dev and preview are independent")
+} else { chk(false, "launch time: independent") }
 if let d = try? JSONEncoder().encode(climbed), let b = try? dec.decode(Project.self, from: d) {
     chk(b.heapFloorGB == 4, "floor: round-trips through projects.json")
 } else { chk(false, "floor: round-trips through projects.json") }

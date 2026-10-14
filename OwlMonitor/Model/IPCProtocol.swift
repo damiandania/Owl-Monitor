@@ -46,6 +46,11 @@ struct IPCServerInfo: Codable, Sendable {
     var iconPath: String? = nil
     /// SF Symbol the app uses when there is no favicon (the framework's symbol).
     var iconSymbol: String? = nil
+    /// While the server is "Launching…": seconds since the launch began, and the expected TOTAL (how long
+    /// the last launch took to become ready — same meaning as `buildETA`). `launchETA` is nil with no
+    /// previous measurement. Both nil in every other state (including "Recycling…").
+    var launchElapsed: Double? = nil
+    var launchETA: Double? = nil
     /// Seconds since the current build started.
     var buildElapsed: Double? = nil
     /// Expected total build seconds (the last successful build's duration), for an ETA.
