@@ -303,7 +303,13 @@ final class IPCServer {
         info.lastError = active?.lastError
         if let active, let elapsed = active.launchElapsed {
             info.launchElapsed = elapsed
-            info.launchETA = active === preview ? p.lastPreviewLaunchSeconds : p.lastLaunchSeconds
+            let isPreview = active === preview
+            let eta = LaunchTiming.eta(isPreview ? p.previewLaunchSeconds : p.launchSeconds)
+            info.launchETA = eta
+            info.launchProgress = LaunchTiming.progress(
+                elapsed: elapsed, eta: eta,
+                etaMarker: LaunchTiming.eta(isPreview ? p.previewLaunchUrlSeconds : p.launchUrlSeconds),
+                markerElapsed: active.launchUrlElapsed)
         }
         if building {
             info.building = true

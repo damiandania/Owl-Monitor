@@ -99,6 +99,13 @@ with the decisions of PRs #3–#5.
 - **2026-10-14 — The notch's provider lives in `AppState`.** `shownQuotaSource` is the one source of truth for clicking the
   notch and `quota show|toggle`; the notch controller only redraws on `quotaSourceDidChange`. It was a private field of the
   controller, so nothing outside the view could read or set it. Still session-only (not persisted), as before.
+- **2026-10-14 — The launch ETA is the median of the last 5 launches, and progress is split at the URL line.** One slow launch (first
+  after a reboot, machine busy) would skew a last-value ETA; the median ignores it. `LaunchTiming.progress` runs elapsed/ETA but, when the
+  moment the server prints its URL is known (stored per launch, median of 5), splits the bar there — a long compile followed by a quick
+  finish no longer crawls then jumps. Capped at 0.95 so a long launch never shows 100 % before `ready`. CPU activity was rejected as a
+  signal: noisy, and the URL line says more. The computed value is exposed (`launchProgress`) so clients don't reimplement it.
+- **2026-10-14 — Port detection ignores command-echo lines** (`> …` from npm/pnpm, `$ …` from yarn). A URL inside a script (a `wait-on`
+  target, a proxy) was taken for the port the server bound — and, found while timing launches, for the "URL printed" milestone.
 - **2026-10-14 — A launch is timed to the first HTTP probe that answers, and only then.** A launch that crashes, is stopped, or
   is merely "assumed up" by the warm-up fallback records nothing, so a failed launch can't poison the ETA. Dev and preview are
   stored separately (`lastLaunchSeconds`, `lastPreviewLaunchSeconds`). `launchElapsed` exists only while *Launching…*: during a

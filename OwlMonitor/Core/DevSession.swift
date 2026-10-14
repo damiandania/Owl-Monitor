@@ -29,7 +29,18 @@ final class DevSession {
     /// Fired once per launch, with the seconds from `start()` to the FIRST successful health probe —
     /// AppState persists it as the ETA for the next launch. Not fired when the launch never answered
     /// (a crash, a stop, or the warm-up fallback that merely assumes the server is up).
-    var onLaunchMeasured: (@MainActor (TimeInterval) -> Void)?
+    /// The second value is when, in that launch, the server printed its URL (nil if it never did before
+    /// answering) — the milestone the launch progress is split at.
+    var onLaunchMeasured: (@MainActor (TimeInterval, TimeInterval?) -> Void)?
+
+    /// When the server printed its URL in this launch (the app parses it for the port). Not observed.
+    @ObservationIgnored private var urlSeenAt: Date?
+
+    /// Seconds from the start of this launch to the server printing its URL; nil until it does.
+    var launchUrlElapsed: TimeInterval? {
+        guard let urlSeenAt, let startedAt else { return nil }
+        return urlSeenAt.timeIntervalSince(startedAt)
+    }
 
     /// Seconds since this launch began, while it is still launching (nil otherwise — including during
     /// the back-off of a "Recycling…", which has no launch under way yet).
@@ -131,6 +142,7 @@ final class DevSession {
         logLines.removeAll()
         lineBuffer.reset()
         detectedPort = nil
+        urlSeenAt = nil
         startedAt = Date()
         openLogFile()
 
@@ -413,6 +425,7 @@ final class DevSession {
             let clean = line.strippedANSI
             if LogNoise.isShellNoise(clean) { continue }
             scanPort(clean)
+            if urlSeenAt == nil, detectedPort != nil { urlSeenAt = Date() }
             fresh.append(line)
             if !meaningful, !clean.isEmpty, !MemoryGuard.isProbeEcho(clean, pattern: probeEcho) { meaningful = true }
         }
@@ -428,12 +441,20 @@ final class DevSession {
     /// still compiling and not accepting HTTP yet. .running is set by the first successful
     /// health probe (startHealth), which is what prevents the recycle-during-warm-up loop.
     private func scanPort(_ clean: String) {
-        if detectedPort == nil,
-           let match = clean.firstMatch(of: /https?:\/\/(?:\[[^\]]*\]|[^\s:\/]+):(\d{2,5})/),
-           let port = Int(match.1) {
+        if detectedPort == nil, let port = Self.port(inLogLine: clean) {
             detectedPort = port
             lastKnownPort = port
         }
+    }
+
+    /// The port in a URL the server prints (`Local: http://localhost:3000/`), or nil. Lines that merely
+    /// ECHO the command are skipped: npm/pnpm print the script text before running it (`> node server.js
+    /// --url http://localhost:4000`), yarn prints `$ …`, and a URL inside a script — a `wait-on` target,
+    /// a proxy — would otherwise be taken for the port the server bound.
+    nonisolated static func port(inLogLine clean: String) -> Int? {
+        if clean.hasPrefix("> ") || clean.hasPrefix("$ ") { return nil }
+        guard let match = clean.firstMatch(of: /https?:\/\/(?:\[[^\]]*\]|[^\s:\/]+):(\d{2,5})/) else { return nil }
+        return Int(match.1)
     }
 
     /// Append a whole chunk's lines as ONE observable mutation and ONE file write — `logLines` is
@@ -682,7 +703,12 @@ final class DevSession {
                     }
                     if firstTime {
                         self.append(line: "ok: server is responding on :\(port)")
-                        if let began = self.startedAt { self.onLaunchMeasured?(Date().timeIntervalSince(began)) }
+                        if let began = self.startedAt {
+                            let total = Date().timeIntervalSince(began)
+                            // Only a URL printed BEFORE the server answered is a milestone of the launch.
+                            let url = self.launchUrlElapsed.flatMap { $0 < total ? $0 : nil }
+                            self.onLaunchMeasured?(total, url)
+                        }
                     }
                     if recovering {
                         self.append(line: "ok: health recovered")

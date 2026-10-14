@@ -17,7 +17,8 @@ func runSessionTests() async -> Int {
     )
     let session = DevSession(project: project)
     var measured: [TimeInterval] = []
-    session.onLaunchMeasured = { measured.append($0) }
+    var measuredUrl: [TimeInterval?] = []
+    session.onLaunchMeasured = { total, url in measured.append(total); measuredUrl.append(url) }
     session.start(memoryGB: 2)
     // While it launches, the elapsed time is available and counts up.
     try? await Task.sleep(for: .milliseconds(300))
@@ -28,6 +29,17 @@ func runSessionTests() async -> Int {
     check("launch: measured exactly once, at the first health probe", measured.count == 1 && measured[0] > 0.3 && measured[0] < 5,
           "measured=\(measured)")
     check("launch: no launchElapsed once running", session.launchElapsed == nil)
+
+    // Port detection: a server's own URL line counts; the echo of the command that contains a URL doesn't.
+    check("port: bundler-style line", DevSession.port(inLogLine: "  ➜  Local:   http://localhost:5173/") == 5173)
+    check("port: nuxt-style line", DevSession.port(inLogLine: "  ➜ Local:    http://localhost:3000/") == 3000)
+    check("port: IPv6 host", DevSession.port(inLogLine: "Local: http://[::1]:4321/") == 4321)
+    check("port: npm's echo of the script is ignored", DevSession.port(inLogLine: "> node -e \"console.log('Local: http://localhost:4873/')\"") == nil)
+    check("port: a wait-on URL in the script is ignored", DevSession.port(inLogLine: "> wait-on http://localhost:3000 && start") == nil)
+    check("port: yarn's echo is ignored", DevSession.port(inLogLine: "$ serve --open http://localhost:9999") == nil)
+    check("port: a line with no URL", DevSession.port(inLogLine: "compiled in 340ms") == nil)
+    check("launch: the URL line's time is reported, before the total",
+          measuredUrl.count == 1 && (measuredUrl[0] ?? -1) > 0 && (measuredUrl[0] ?? 99) < measured[0], "url=\(measuredUrl) total=\(measured)")
 
     check("port parsed", session.detectedPort == 4321, "port=\(String(describing: session.detectedPort))")
     let running: Bool = { if case .running = session.state { return true }; return false }()
