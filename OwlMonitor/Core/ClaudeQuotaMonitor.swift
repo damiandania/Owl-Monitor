@@ -21,6 +21,9 @@ enum QuotaStatus: Equatable {
 final class ClaudeQuotaMonitor {
     private(set) var fiveHour: Int?
     private(set) var sevenDay: Int?
+    /// When each window resets (parsed from the `/usage` text); nil until a reading carries one.
+    private(set) var fiveHourResetsAt: Date?
+    private(set) var sevenDayResetsAt: Date?
     private(set) var updatedAt: Date?
     /// Health of the most recent probe (after its retries). Drives which badge the HUD shows; while
     /// it isn't `.ok` the HUD hides the last-known numbers rather than let a frozen reading look like
@@ -65,9 +68,11 @@ final class ClaudeQuotaMonitor {
             let result = await Self.probe()
             await MainActor.run {
                 switch result {
-                case .data(let five, let seven):
+                case .data(let five, let seven, let resets):
                     if let five { self.fiveHour = five }
                     if let seven { self.sevenDay = seven }
+                    if let r = resets.five { self.fiveHourResetsAt = r }
+                    if let r = resets.seven { self.sevenDayResetsAt = r }
                     self.updatedAt = Date()
                     self.apply(.ok)
                 case .failure(let status):
@@ -87,7 +92,10 @@ final class ClaudeQuotaMonitor {
         }
     }
 
-    enum ProbeResult: Equatable { case data(five: Int?, seven: Int?), failure(QuotaStatus) }
+    /// When each window resets, if the output said.
+    struct Resets: Equatable { var five: Date?; var seven: Date?; static let none = Resets() }
+
+    enum ProbeResult: Equatable { case data(five: Int?, seven: Int?, resets: Resets = .none), failure(QuotaStatus) }
 
     /// Primary probe (`claude -p '/usage'`, up to 3 attempts) for the numbers, plus a one-shot
     /// `claude usage` diagnostic to explain a persistent hollow response. `-p '/usage'` SWALLOWS the
@@ -131,7 +139,11 @@ final class ClaudeQuotaMonitor {
     nonisolated static func classify(out: String, err: String, code: Int32) -> ProbeResult {
         let five = percent(after: "Current session:", in: out)
         let seven = percent(after: "Current week (all models):", in: out)
-        if five != nil || seven != nil { return .data(five: five, seven: seven) }
+        if five != nil || seven != nil {
+            return .data(five: five, seven: seven, resets: Resets(
+                five: parseReset(after: "Current session:", in: out),
+                seven: parseReset(after: "Current week (all models):", in: out)))
+        }
         let blob = (out + "\n" + err).lowercased()
         // Missing means `claude` itself: the shell's exit 127, or a "not found" line naming claude —
         // never some other program's (a hook's `node`).
@@ -184,6 +196,52 @@ final class ClaudeQuotaMonitor {
                 process.terminationStatus)
     }
 
+    /// The reset time on the line of `label`, e.g. `Current session: 16% used · resets Oct 2 at 8pm
+    /// (Europe/Paris)` → Oct 2, 20:00 in Paris. The text carries no year, so the nearest future
+    /// occurrence is taken; a bare time (`resets 8pm`) means today, or tomorrow if that has passed.
+    /// The zone in parentheses is honoured (the machine's own when absent). nil if there is no reset
+    /// on that line or it doesn't parse. Pure.
+    nonisolated static func parseReset(after label: String, in text: String, now: Date = Date()) -> Date? {
+        guard let start = text.range(of: label) else { return nil }
+        let line = text[start.upperBound...].prefix { $0 != "\n" }
+        guard let r = line.range(of: "resets ") else { return nil }
+        var rest = String(line[r.upperBound...])
+        var tz = TimeZone.current
+        if let open = rest.lastIndex(of: "("), let close = rest.lastIndex(of: ")"), open < close {
+            if let z = TimeZone(identifier: String(rest[rest.index(after: open)..<close])) { tz = z }
+            rest = String(rest[..<open])
+        }
+        rest = rest.trimmingCharacters(in: .whitespaces)
+        let parts = rest.components(separatedBy: " at ")
+        let timePart = (parts.last ?? "").lowercased().trimmingCharacters(in: .whitespaces)
+        let datePart = parts.count > 1 ? parts[0].trimmingCharacters(in: .whitespaces) : nil
+
+        // "8pm" / "10:30pm"
+        guard let m = timePart.firstMatch(of: /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/),
+              var hour = Int(m.1) else { return nil }
+        let minute = m.2.flatMap { Int($0) } ?? 0
+        guard (1...12).contains(hour), (0...59).contains(minute) else { return nil }
+        if m.3 == "pm", hour != 12 { hour += 12 }
+        if m.3 == "am", hour == 12 { hour = 0 }
+
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = tz
+        var comps = cal.dateComponents([.year, .month, .day], from: now)
+        if let datePart {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = tz; f.dateFormat = "MMM d"
+            guard let d = f.date(from: datePart) else { return nil }
+            let md = cal.dateComponents([.month, .day], from: d)
+            comps.month = md.month; comps.day = md.day
+        }
+        comps.hour = hour; comps.minute = minute; comps.second = 0
+        guard var date = cal.date(from: comps) else { return nil }
+        if date < now.addingTimeInterval(-86_400) || (datePart == nil && date < now) {
+            date = cal.date(byAdding: datePart == nil ? .day : .year, value: 1, to: date) ?? date
+        }
+        return date
+    }
+
     /// The integer just before the first `%` following `label` — e.g. `label` "Current session:" in
     /// "Current session: 5% used" yields 5.
     nonisolated private static func percent(after label: String, in text: String) -> Int? {
@@ -207,6 +265,8 @@ final class CodexQuotaMonitor {
     struct Window: Equatable {
         let usedPercent: Int
         let durationMinutes: Int?
+        /// When this window resets (`resetsAt`, epoch seconds, in the app-server's reply).
+        var resetsAt: Date? = nil
     }
 
     private(set) var primary: Window?
@@ -227,6 +287,10 @@ final class CodexQuotaMonitor {
     private var timer: Timer?
     private static let healthyInterval: TimeInterval = 10 * 60
     private static let retryInterval: TimeInterval = 2 * 60
+
+    /// Starts the monitor only if it isn't running yet — for callers that ask often (the CLI) and must
+    /// not spawn a Codex process per request.
+    func ensureRunning() { if timer == nil { activate() } }
 
     /// Starts the on-demand monitor (called when the user switches the notch to GPT) and immediately
     /// obtains a fresh value, so the first click never waits for a background polling interval.
@@ -363,6 +427,7 @@ final class CodexQuotaMonitor {
     nonisolated private static func window(in limits: [String: Any], key: String) -> Window? {
         guard let raw = limits[key] as? [String: Any],
               let usedPercent = raw["usedPercent"] as? Int else { return nil }
-        return Window(usedPercent: usedPercent, durationMinutes: raw["windowDurationMins"] as? Int)
+        let resets = (raw["resetsAt"] as? Double).map { Date(timeIntervalSince1970: $0) }
+        return Window(usedPercent: usedPercent, durationMinutes: raw["windowDurationMins"] as? Int, resetsAt: resets)
     }
 }

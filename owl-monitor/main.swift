@@ -17,10 +17,17 @@ USAGE:
   owl-monitor build [path]          Build the project (runs alongside the dev server)
   owl-monitor status [--json]       List every known project (name, state, port)
   owl-monitor stop [path] [--all]   Stop one project's server (default: cwd), or --all of them
+  owl-monitor stop [path] --force   Close EVERYTHING Owl Monitor runs for the project (server, preview,
+                                    worker, build, leftover trees it started) and drop it from the notch
+                                    (state "Idle"). Keeps the project (unlike `remove`). Alias: close
   owl-monitor restart [path]        Relaunch the project's server (works from any state)
   owl-monitor remove [path]         Stop and forget the project (aliases: rm, forget)
   owl-monitor logs [path] [-f]      Print (or follow with -f) that project's log (default: cwd)
   owl-monitor logs [path] --build   Print the WHOLE last build's output (the full error, not the tail)
+  owl-monitor awake [status] [--json]   Keep-awake (the toolbar cup): is it on, until when
+  owl-monitor awake add <minutes>   Add time (off -> on for that long; on -> extends; 1-1440)
+  owl-monitor awake off             Let the Mac sleep again
+  owl-monitor quota [--json] [--refresh]   Claude and Codex usage windows (what the notch shows)
   owl-monitor version               Print the version (aliases: -v, --version)
   owl-monitor docs                  Print this help
 
@@ -224,12 +231,13 @@ case "build", "restart", "remove", "rm", "forget":
     let normalized = (cmd == "rm" || cmd == "forget") ? "remove" : cmd
     runAndReport(IPCRequest(cmd: normalized, path: singlePath(a), name: nil, gb: nil, all: nil))
 
-case "stop":
-    let a = DMParse.parse(rest, boolFlags: ["--all"], allowGB: false)
+case "stop", "close":
+    let a = DMParse.parse(rest, boolFlags: ["--all", "--force"], allowGB: false)
     if let e = a.error { die(e) }
     let all = a.flags.contains("--all")
+    let force = a.flags.contains("--force") || cmd == "close"
     runAndReport(IPCRequest(cmd: "stop", path: all ? nil : singlePath(a),
-                            name: nil, gb: nil, all: all ? true : nil))
+                            name: nil, gb: nil, all: all ? true : nil, force: force ? true : nil))
 
 case "status":
     let a = DMParse.parse(rest, boolFlags: ["--json"], allowGB: false)
@@ -251,6 +259,33 @@ case "status":
             print("  \(s.path)")
         }
     }
+
+case "awake":
+    let a = DMParse.parse(rest, boolFlags: ["--json"], allowGB: false)
+    if let e = a.error { die(e) }
+    let sub = a.positionals.first ?? "status"
+    var minutes: Int?
+    switch sub {
+    case "status", "off":
+        if a.positionals.count > 1 { die("too many arguments: \(a.positionals.dropFirst().joined(separator: " "))") }
+    case "add":
+        guard a.positionals.count == 2, let m = Int(a.positionals[1]), (1...1440).contains(m) else {
+            die("usage: owl-monitor awake add <minutes>   (1-1440)")
+        }
+        minutes = m
+    default:
+        die("unknown awake command '\(sub)' (use status, add <minutes>, off)")
+    }
+    runAndReport(IPCRequest(cmd: "awake", path: nil, name: nil, gb: nil, all: nil,
+                            sub: sub, minutes: minutes, json: a.flags.contains("--json") ? true : nil))
+
+case "quota":
+    let a = DMParse.parse(rest, boolFlags: ["--json", "--refresh"], allowGB: false)
+    if let e = a.error { die(e) }
+    if !a.positionals.isEmpty { die("too many arguments: \(a.positionals.joined(separator: " "))") }
+    runAndReport(IPCRequest(cmd: "quota", path: nil, name: nil, gb: nil, all: nil,
+                            json: a.flags.contains("--json") ? true : nil,
+                            refresh: a.flags.contains("--refresh") ? true : nil))
 
 case "logs":
     let a = DMParse.parse(rest, boolFlags: ["-f", "--follow", "--build"], allowGB: false)

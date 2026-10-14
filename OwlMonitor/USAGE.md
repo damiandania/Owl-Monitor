@@ -72,6 +72,25 @@ The heap maps to `NODE_OPTIONS=--max-old-space-size`. It is **deterministic**:
 - **OOM recovery**: a crash that looks like a V8 out-of-memory is retried once with a bigger heap; if
   it still can't fit, the server is left `Failed` with an OOM `lastError` suggesting `--gb`.
 
+## Keep awake, quota, force-close
+
+```bash
+owl-monitor awake status --json     # {"active":true,"indefinite":false,"until":"2026-10-14T22:05:28Z","remainingSeconds":3600}
+owl-monitor awake add 30            # off → on for 30 min; on → 30 min added to what's left (1–1440; on "indefinitely" nothing changes)
+owl-monitor awake off
+owl-monitor quota --json            # claude / codex: status, session (5 h) and weekly windows → percentLeft, percentUsed, resetsAt
+owl-monitor quota --refresh         # re-read both providers first (a few seconds)
+owl-monitor stop <path> --force     # close everything Owl Monitor runs for the project; it leaves the notch (state "Idle")
+```
+
+- `awake` drives the same switch as the toolbar cup, so what the CLI does is what the app shows.
+- `quota` reports what the notch shows. `status` is `ok`, `pending` (no reading yet — Codex starts on the first call), or an error
+  (`signedOut`, `notInstalled`, `unavailable`, with `error` set and the numbers hidden). A window that is neither 5 h nor 7 d
+  (Codex's free plan has a 30-day one) is listed under `other` with its `windowMinutes`.
+- `stop --force` (alias `close`) is **not** `remove`: the project stays. It stops the server, preview, worker and build, drops
+  them (so the project is `Idle` and leaves the notch, unlike a plain stop, which leaves it `Stopped`), and reaps leftover process
+  trees of THAT project by their ownership tag — never by folder, so an editor or terminal there is untouched. Returns at once.
+
 ## Supervision
 
 - **One supervised server per project**, keyed by path — several projects run at once. `up` is

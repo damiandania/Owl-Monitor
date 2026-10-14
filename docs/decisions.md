@@ -87,6 +87,21 @@ with the decisions of PRs #3–#5.
 - **2026-10-13 — Saved Claude model ids migrate to the same tier** (`AppSettings.currentModel`), so a retired
   id can't leave the picker blank or make every call fail.
 
+## CLI for other programs
+
+- **2026-10-14 — `awake add` extends rather than resets.** Adding to a running keep-awake pushes its deadline out
+  without releasing the IOKit assertions (a release-and-retake could let the Mac sleep in between); on an
+  indefinite one there is nothing to add. The reply is the state AFTER the action.
+- **2026-10-14 — `quota` hides numbers when a provider is unusable**, as the notch does, and says why in `error`.
+  Windows are classified by length (<= 1 day session, 6-8 days weekly) and anything else goes to `other` instead of
+  being mislabelled — Codex's free plan reports a 30-day window. The Codex monitor starts on the first `quota` call
+  (once, then self-refreshing) because it otherwise only runs when the notch is switched to GPT.
+- **2026-10-14 — Force-close reaps by ownership tag only.** `stop --force` drops the project's runners (so it reads
+  Idle and leaves the notch) and reaps tagged leftovers of that project; it never goes by folder or command line, so
+  editors, terminals and Claude sessions there are safe. It is not `remove`.
+- **2026-10-14 — `iconPath` shares the app's resolver.** `ProjectIconView.faviconPath` is what the window uses to pick
+  a favicon, so the CLI and the app can't disagree.
+
 ## Tests
 
 - **2026-10-13 — Suites poll with a bound instead of sleeping fixed times.** The orphan and session suites

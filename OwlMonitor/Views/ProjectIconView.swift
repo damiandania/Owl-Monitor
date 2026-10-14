@@ -34,17 +34,30 @@ struct ProjectIconView: View {
         "src/app/apple-icon.png", "src/app/favicon.ico",
     ]
 
-    static func favicon(for projectPath: String) -> NSImage? {
-        if let cached = cache[projectPath] { return cached }
+    private static var pathCache: [String: String?] = [:]
+
+    /// The file this view shows as the project's icon: the first of `candidates`, in that order, that
+    /// exists and loads as an image. nil when there is none (the framework symbol is shown instead).
+    /// Cached per project, shared with `favicon(for:)`, so the CLI's `status --json` (`iconPath`) and
+    /// the window always agree.
+    static func faviconPath(for projectPath: String) -> String? {
+        if let cached = pathCache[projectPath] { return cached }
         let fm = FileManager.default
-        var found: NSImage?
+        var found: String?
         for relative in candidates {
             let path = projectPath + "/" + relative
             if fm.fileExists(atPath: path), let image = NSImage(contentsOfFile: path), image.isValid {
-                found = image
+                found = path
                 break
             }
         }
+        pathCache[projectPath] = found
+        return found
+    }
+
+    static func favicon(for projectPath: String) -> NSImage? {
+        if let cached = cache[projectPath] { return cached }
+        let found = faviconPath(for: projectPath).flatMap { NSImage(contentsOfFile: $0) }
         cache[projectPath] = found
         return found
     }

@@ -268,6 +268,11 @@ final class AppState {
         NSApp.windows.first { $0.identifier?.rawValue == "main" }?.makeKeyAndOrderFront(nil)
     }
 
+    /// The Claude / Codex quota monitors, set once at launch by `AppDelegate` (which owns them). The IPC
+    /// hub reads them for `owl-monitor quota`.
+    @ObservationIgnored var claudeQuota: ClaudeQuotaMonitor?
+    @ObservationIgnored var codexQuota: CodexQuotaMonitor?
+
     /// Physical RAM in whole GB — the ceiling for any injected heap.
     var systemRAMGB: Int { max(1, Int((systemSampler.totalMem / 1_073_741_824).rounded())) }
 
@@ -421,7 +426,7 @@ final class AppState {
 
     /// `<id>:<kind>` of every runner that's live right now — the tag a process must carry to count as
     /// supervised rather than orphaned (see OrphanReaper).
-    private var supervisedRunnerKeys: Set<String> {
+    var supervisedRunnerKeys: Set<String> {
         var keys = Set<String>()
         for (id, s) in sessions where s.state.isActive { keys.insert(OrphanReaper.key(projectID: id, kind: "dev")) }
         for (id, p) in previews where p.state.isActive { keys.insert(OrphanReaper.key(projectID: id, kind: "preview")) }

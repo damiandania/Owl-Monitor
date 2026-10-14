@@ -178,8 +178,11 @@ While the app is running it hosts a local hub (Unix socket). Any terminal — or
 | `owl-monitor up [path] [--gb N] [--wait]` | Start + supervise a project (default: cwd). **Idempotent**; `--gb N` pins the heap; `--wait` blocks until HTTP-ready and prints the URL. If a build is running, `--wait` **queues behind it**; without `--wait` it reports the build and exits (never interrupts it). |
 | `owl-monitor preview [path] [--gb N] [--wait]` | Serve the **production build** (needs a `preview`/`start` script). Same build-coordination as `up`. |
 | `owl-monitor build [path]` | Build the project (synchronous; ✅/❌ + non-zero on failure); adds a build tab. On failure prints `↳ full build log: <path>` — read it all with `logs --build`. |
-| `owl-monitor status [--json]` | List every known project with state + port. `--json` adds `ready` · `url` · `pid` · `exitCode` · `lastError` · `logPath` · `buildLogPath` · `building` · `buildElapsed` · `buildETA`. |
-| `owl-monitor stop [path] [--all]` | Stop one server (default: cwd), or `--all`. |
+| `owl-monitor status [--json]` | List every known project with state + port. `--json` adds `ready` · `url` · `pid` · `exitCode` · `lastError` · `logPath` · `buildLogPath` · `iconPath` (the project's favicon file, as the app shows it) · `iconSymbol` (the SF Symbol shown when there is none) · `building` · `buildElapsed` · `buildETA`. |
+| `owl-monitor stop [path] [--all]` | Stop one server (default: cwd), or `--all`. The project stays in the notch as *Stopped*. |
+| `owl-monitor stop [path] --force` | **Close everything** Owl Monitor runs for the project — server, preview, worker, build, and any leftover tree it started (found by its ownership tag, never by folder, so your editor and terminals are safe) — and drop it from the notch (*Idle*). Keeps the project, unlike `remove`. Alias: `close`. |
+| `owl-monitor awake [status\|add <min>\|off] [--json]` | The toolbar's **Keep Awake** cup from a terminal: `add 30` turns it on for 30 min, or adds 30 to what's left (1–1440). `--json` → `{active, indefinite, until, remainingSeconds}`. |
+| `owl-monitor quota [--json] [--refresh]` | The Claude and Codex usage windows the notch shows, with % left and when each resets. `--refresh` re-reads them first. |
 | `owl-monitor restart [path]` | Relaunch from **any** state — including `Failed` / `Idle`. |
 | `owl-monitor remove [path]` | Stop and **forget** the project. Aliases: `rm`, `forget`. |
 | `owl-monitor logs [path] [-f]` | Print, or follow with `-f`, that project's own dev-server log. |

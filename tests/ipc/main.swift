@@ -23,6 +23,21 @@ guard let encReq = try? JSONEncoder().encode(IPCRequest(cmd: "up", path: "/proj"
       let backReq = try? JSONDecoder().decode(IPCRequest.self, from: encReq) else { print("FAIL ipc: IPCRequest roundtrip"); exit(1) }
 chk(backReq.cmd == "up" && backReq.path == "/proj" && backReq.gb == 8, "IPCRequest roundtrip")
 
+// 2b) The fields added for external clients (awake / quota / icons) round-trip, and a payload from an
+// older peer that doesn't carry them still decodes.
+let awakeReq = IPCRequest(cmd: "awake", path: nil, name: nil, gb: nil, all: nil, sub: "add", minutes: 30, json: true, refresh: nil)
+if let d = try? JSONEncoder().encode(awakeReq), let b = try? JSONDecoder().decode(IPCRequest.self, from: d) {
+    chk(b.cmd == "awake" && b.sub == "add" && b.minutes == 30 && b.json == true && b.refresh == nil, "IPCRequest awake fields round-trip")
+} else { chk(false, "IPCRequest awake fields round-trip") }
+chk((try? JSONDecoder().decode(IPCRequest.self, from: Data(#"{"cmd":"status"}"#.utf8)))?.sub == nil, "old request (no new fields) still decodes")
+var iconed = IPCServerInfo(name: "app", path: "/p", state: "Idle", port: nil, logPath: nil)
+iconed.iconPath = "/p/app/icon.svg"; iconed.iconSymbol = "leaf"
+if let d = try? JSONEncoder().encode(iconed), let b = try? JSONDecoder().decode(IPCServerInfo.self, from: d) {
+    chk(b.iconPath == "/p/app/icon.svg" && b.iconSymbol == "leaf", "IPCServerInfo icon fields round-trip")
+} else { chk(false, "IPCServerInfo icon fields round-trip") }
+chk((try? JSONDecoder().decode(IPCServerInfo.self, from: Data(#"{"name":"a","path":"/p","state":"Idle"}"#.utf8)))?.iconPath == nil,
+    "old status entry (no icon fields) still decodes")
+
 // 3) Real framed I/O through IPCIO over a pipe: write → readLine → decode (the hub's exact framing).
 var fds = [Int32](repeating: 0, count: 2)
 chk(pipe(&fds) == 0, "pipe created")
