@@ -272,6 +272,18 @@ final class AppState {
     /// hub reads them for `owl-monitor quota`.
     @ObservationIgnored var claudeQuota: ClaudeQuotaMonitor?
     @ObservationIgnored var codexQuota: CodexQuotaMonitor?
+    /// Which provider the notch's quota readout shows. One source of truth for the click on the notch
+    /// and `owl-monitor quota show` — change it through `showQuota(_:)`, so the notch redraws.
+    @ObservationIgnored private(set) var shownQuotaSource: QuotaSource = .claude
+    /// Set by the notch controller: redraw after the shown provider changed.
+    @ObservationIgnored var quotaSourceDidChange: (() -> Void)?
+
+    func showQuota(_ source: QuotaSource) {
+        guard source != shownQuotaSource else { return }
+        shownQuotaSource = source
+        if source == .gpt { codexQuota?.ensureRunning() }
+        quotaSourceDidChange?()
+    }
 
     /// Physical RAM in whole GB — the ceiling for any injected heap.
     var systemRAMGB: Int { max(1, Int((systemSampler.totalMem / 1_073_741_824).rounded())) }

@@ -96,6 +96,9 @@ with the decisions of PRs #3–#5.
   Windows are classified by length (<= 1 day session, 6-8 days weekly) and anything else goes to `other` instead of
   being mislabelled — Codex's free plan reports a 30-day window. The Codex monitor starts on the first `quota` call
   (once, then self-refreshing) because it otherwise only runs when the notch is switched to GPT.
+- **2026-10-14 — The notch's provider lives in `AppState`.** `shownQuotaSource` is the one source of truth for clicking the
+  notch and `quota show|toggle`; the notch controller only redraws on `quotaSourceDidChange`. It was a private field of the
+  controller, so nothing outside the view could read or set it. Still session-only (not persisted), as before.
 - **2026-10-14 — Force-close reaps by ownership tag only.** `stop --force` drops the project's runners (so it reads
   Idle and leaves the notch) and reaps tagged leftovers of that project; it never goes by folder or command line, so
   editors, terminals and Claude sessions there are safe. It is not `remove`.

@@ -246,6 +246,17 @@ final class IPCServer {
             // The Codex monitor normally starts only when the notch is switched to GPT; the first ask
             // starts it (once — it then refreshes itself every 10 min), so the first reply may say `pending`.
             codex.ensureRunning()
+            // `quota show claude|codex` and `quota toggle` change what the notch shows (the same switch as
+            // clicking it); they return at once with the new state.
+            switch req.sub {
+            case "claude": app.showQuota(.claude)
+            case "codex": app.showQuota(.gpt)
+            case "toggle": app.showQuota(app.shownQuotaSource == .claude ? .gpt : .claude)
+            case nil: break
+            default:
+                IPCIO.write(client, IPCMessage(type: "error", message: "unknown quota command (use show claude|codex, toggle)"))
+                return
+            }
             if req.refresh == true {
                 let before = (claude.updatedAt, codex.updatedAt)
                 claude.refresh(); codex.refresh()
@@ -256,8 +267,10 @@ final class IPCServer {
                 }
             }
             let c = Self.quotaProvider(claude), x = Self.quotaProvider(codex)
+            let shown = app.shownQuotaSource == .gpt ? "codex" : "claude"
             IPCIO.write(client, IPCMessage(type: "ok",
-                message: req.json == true ? QuotaReport.json(claude: c, codex: x) : QuotaReport.text(claude: c, codex: x)))
+                message: req.json == true ? QuotaReport.json(claude: c, codex: x, shown: shown)
+                                          : QuotaReport.text(claude: c, codex: x, shown: shown)))
 
         default:
             IPCIO.write(client, IPCMessage(type: "error", message: "unknown command"))

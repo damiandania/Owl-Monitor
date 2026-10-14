@@ -75,16 +75,18 @@ enum QuotaReport {
         ]
     }
 
-    static func json(claude: Provider, codex: Provider) -> String {
+    /// `shown` is the provider the notch is showing right now ("claude" or "codex").
+    static func json(claude: Provider, codex: Provider, shown: String = "claude") -> String {
         let iso = ISO8601DateFormatter()
-        let root: [String: Any] = ["claude": object(claude, iso), "codex": object(codex, iso)]
+        let root: [String: Any] = ["claude": object(claude, iso), "codex": object(codex, iso), "shown": shown]
         let data = try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys, .prettyPrinted])
         return data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
     }
 
     /// One line per provider: `Claude  5h 84% left (resets 20:00) · week 14% left (resets Oct 4 22:00)`.
-    static func text(claude: Provider, codex: Provider, now: Date = Date()) -> String {
-        [line("Claude", claude, now), line("Codex ", codex, now)].joined(separator: "\n")
+    static func text(claude: Provider, codex: Provider, shown: String = "claude", now: Date = Date()) -> String {
+        [line("Claude", claude, now), line("Codex ", codex, now), "Notch shows: \(shown == "codex" ? "Codex" : "Claude")"]
+            .joined(separator: "\n")
     }
 
     private static func line(_ name: String, _ p: Provider, _ now: Date) -> String {

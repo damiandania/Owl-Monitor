@@ -102,6 +102,9 @@ chk(QuotaReport.classify([W(usedPercent: 10, resetsAt: nil, windowMinutes: 300),
 chk(P(status: .ok, stale: false, updatedAt: now, session: W(usedPercent: 120, resetsAt: nil, windowMinutes: 300), weekly: nil) == P(status: .ok, stale: false, updatedAt: now, session: W(usedPercent: 120, resetsAt: nil, windowMinutes: 300), weekly: nil)
     && ((parsed(QuotaReport.json(claude: P(status: .ok, stale: false, updatedAt: now, session: W(usedPercent: 120, resetsAt: nil, windowMinutes: 300), weekly: nil), codex: freeCodex))["claude"] as? [String: Any])?["session"] as? [String: Any])?["percentLeft"] as? Int == 0,
     "report: percentLeft is clamped to 0...100")
+chk(report["shown"] as? String == "claude", "report: the notch's provider is in the root, default claude")
+chk(parsed(QuotaReport.json(claude: okClaude, codex: freeCodex, shown: "codex"))["shown"] as? String == "codex", "report: shown reflects codex")
+chk(QuotaReport.text(claude: okClaude, codex: freeCodex, shown: "codex", now: now).hasSuffix("Notch shows: Codex"), "report: human text says what the notch shows")
 let line = QuotaReport.text(claude: okClaude, codex: freeCodex, now: now)
 chk(line.contains("5h 84% left") && line.contains("week 14% left") && line.contains("30d 61% left"), "report: human text", line)
 

@@ -28,6 +28,8 @@ USAGE:
   owl-monitor awake add <minutes>   Add time (off -> on for that long; on -> extends; 1-1440)
   owl-monitor awake off             Let the Mac sleep again
   owl-monitor quota [--json] [--refresh]   Claude and Codex usage windows (what the notch shows)
+  owl-monitor quota show claude|codex      Switch which provider the notch shows (same as clicking it)
+  owl-monitor quota toggle                 Switch to the other one
   owl-monitor version               Print the version (aliases: -v, --version)
   owl-monitor docs                  Print this help
 
@@ -282,8 +284,22 @@ case "awake":
 case "quota":
     let a = DMParse.parse(rest, boolFlags: ["--json", "--refresh"], allowGB: false)
     if let e = a.error { die(e) }
-    if !a.positionals.isEmpty { die("too many arguments: \(a.positionals.joined(separator: " "))") }
+    var shownProvider: String?
+    switch a.positionals.first {
+    case nil: break
+    case "show":
+        guard a.positionals.count == 2, ["claude", "codex"].contains(a.positionals[1]) else {
+            die("usage: owl-monitor quota show claude|codex")
+        }
+        shownProvider = a.positionals[1]
+    case "toggle":
+        if a.positionals.count > 1 { die("usage: owl-monitor quota toggle") }
+        shownProvider = "toggle"
+    default:
+        die("unknown quota command '\(a.positionals[0])' (use show claude|codex, toggle)")
+    }
     runAndReport(IPCRequest(cmd: "quota", path: nil, name: nil, gb: nil, all: nil,
+                            sub: shownProvider,
                             json: a.flags.contains("--json") ? true : nil,
                             refresh: a.flags.contains("--refresh") ? true : nil))
 

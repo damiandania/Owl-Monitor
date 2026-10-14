@@ -182,7 +182,8 @@ While the app is running it hosts a local hub (Unix socket). Any terminal — or
 | `owl-monitor stop [path] [--all]` | Stop one server (default: cwd), or `--all`. The project stays in the notch as *Stopped*. |
 | `owl-monitor stop [path] --force` | **Close everything** Owl Monitor runs for the project — server, preview, worker, build, and any leftover tree it started (found by its ownership tag, never by folder, so your editor and terminals are safe) — and drop it from the notch (*Idle*). Keeps the project, unlike `remove`. Alias: `close`. |
 | `owl-monitor awake [status\|add <min>\|off] [--json]` | The toolbar's **Keep Awake** cup from a terminal: `add 30` turns it on for 30 min, or adds 30 to what's left (1–1440). `--json` → `{active, indefinite, until, remainingSeconds}`. |
-| `owl-monitor quota [--json] [--refresh]` | The Claude and Codex usage windows the notch shows, with % left and when each resets. `--refresh` re-reads them first. |
+| `owl-monitor quota [--json] [--refresh]` | The Claude and Codex usage windows the notch shows, with % left and when each resets, plus `shown`: which provider the notch displays. `--refresh` re-reads them first. |
+| `owl-monitor quota show claude\|codex` · `quota toggle` | Switch which provider the notch shows — the same switch as clicking it — and return the new state at once. |
 | `owl-monitor restart [path]` | Relaunch from **any** state — including `Failed` / `Idle`. |
 | `owl-monitor remove [path]` | Stop and **forget** the project. Aliases: `rm`, `forget`. |
 | `owl-monitor logs [path] [-f]` | Print, or follow with `-f`, that project's own dev-server log. |

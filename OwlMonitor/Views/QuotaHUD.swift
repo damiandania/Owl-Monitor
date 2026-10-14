@@ -324,7 +324,8 @@ final class QuotaHUDController {
     private let appState: AppState
     private let claudeQuota: ClaudeQuotaMonitor
     private let gptQuota: CodexQuotaMonitor
-    private var quotaSource: QuotaSource = .claude
+    /// The provider shown — owned by `AppState` (the CLI changes it too).
+    private var quotaSource: QuotaSource { appState.shownQuotaSource }
 
     private var hudHovered = false
     private var menuHovered = false
@@ -385,6 +386,7 @@ final class QuotaHUDController {
             MainActor.assumeIsolated { self?.popover.contentViewController = nil }
         }
 
+        appState.quotaSourceDidChange = { [weak self] in self?.updateQuotaView() }
         updateQuotaView()
         updateStatusStrip()
         // The SwiftUI strip observes individual state changes. This light poll only adjusts its AppKit
@@ -409,9 +411,7 @@ final class QuotaHUDController {
     }
 
     private func toggleQuotaSource() {
-        quotaSource = quotaSource == .claude ? .gpt : .claude
-        if quotaSource == .gpt { gptQuota.activate() }
-        updateQuotaView()
+        appState.showQuota(quotaSource == .claude ? .gpt : .claude)   // redraws via quotaSourceDidChange
     }
 
     private func updateStatusStrip() {

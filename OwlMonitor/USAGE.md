@@ -80,6 +80,7 @@ owl-monitor awake add 30            # off → on for 30 min; on → 30 min added
 owl-monitor awake off
 owl-monitor quota --json            # claude / codex: status, session (5 h) and weekly windows → percentLeft, percentUsed, resetsAt
 owl-monitor quota --refresh         # re-read both providers first (a few seconds)
+owl-monitor quota show codex        # make the notch show Codex (or claude); `quota toggle` flips it. Reply has "shown": "codex"
 owl-monitor stop <path> --force     # close everything Owl Monitor runs for the project; it leaves the notch (state "Idle")
 ```
 
