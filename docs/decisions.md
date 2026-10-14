@@ -87,6 +87,35 @@ with the decisions of PRs #3–#5.
 - **2026-10-13 — Saved Claude model ids migrate to the same tier** (`AppSettings.currentModel`), so a retired
   id can't leave the picker blank or make every call fail.
 
+## CLI for other programs
+
+- **2026-10-14 — `awake add` extends rather than resets.** Adding to a running keep-awake pushes its deadline out
+  without releasing the IOKit assertions (a release-and-retake could let the Mac sleep in between); on an
+  indefinite one there is nothing to add. The reply is the state AFTER the action.
+- **2026-10-14 — `quota` hides numbers when a provider is unusable**, as the notch does, and says why in `error`.
+  Windows are classified by length (<= 1 day session, 6-8 days weekly) and anything else goes to `other` instead of
+  being mislabelled — Codex's free plan reports a 30-day window. The Codex monitor starts on the first `quota` call
+  (once, then self-refreshing) because it otherwise only runs when the notch is switched to GPT.
+- **2026-10-14 — The notch's provider lives in `AppState`.** `shownQuotaSource` is the one source of truth for clicking the
+  notch and `quota show|toggle`; the notch controller only redraws on `quotaSourceDidChange`. It was a private field of the
+  controller, so nothing outside the view could read or set it. Still session-only (not persisted), as before.
+- **2026-10-14 — The launch ETA is the median of the last 5 launches, and progress is split at the URL line.** One slow launch (first
+  after a reboot, machine busy) would skew a last-value ETA; the median ignores it. `LaunchTiming.progress` runs elapsed/ETA but, when the
+  moment the server prints its URL is known (stored per launch, median of 5), splits the bar there — a long compile followed by a quick
+  finish no longer crawls then jumps. Capped at 0.95 so a long launch never shows 100 % before `ready`. CPU activity was rejected as a
+  signal: noisy, and the URL line says more. The computed value is exposed (`launchProgress`) so clients don't reimplement it.
+- **2026-10-14 — Port detection ignores command-echo lines** (`> …` from npm/pnpm, `$ …` from yarn). A URL inside a script (a `wait-on`
+  target, a proxy) was taken for the port the server bound — and, found while timing launches, for the "URL printed" milestone.
+- **2026-10-14 — A launch is timed to the first HTTP probe that answers, and only then.** A launch that crashes, is stopped, or
+  is merely "assumed up" by the warm-up fallback records nothing, so a failed launch can't poison the ETA. Dev and preview are
+  stored separately (`lastLaunchSeconds`, `lastPreviewLaunchSeconds`). `launchElapsed` exists only while *Launching…*: during a
+  *Recycling…* back-off no launch is under way yet.
+- **2026-10-14 — Force-close reaps by ownership tag only.** `stop --force` drops the project's runners (so it reads
+  Idle and leaves the notch) and reaps tagged leftovers of that project; it never goes by folder or command line, so
+  editors, terminals and Claude sessions there are safe. It is not `remove`.
+- **2026-10-14 — `iconPath` shares the app's resolver.** `ProjectIconView.faviconPath` is what the window uses to pick
+  a favicon, so the CLI and the app can't disagree.
+
 ## Tests
 
 - **2026-10-13 — Suites poll with a bound instead of sleeping fixed times.** The orphan and session suites

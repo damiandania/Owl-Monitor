@@ -88,6 +88,48 @@ climbed.heapFloorGB = 4
 chk(climbed.devHeapFloorGB == 4, "floor: an explicit proven floor wins")
 chk(Project(name: "p", path: "/tmp/p", buildAutoHeapGB: 8).previewHeapFloorGB == 8
     && Project(name: "p", path: "/tmp/p").previewHeapFloorGB == Project.minHeapGB, "floor: preview follows the build level")
+// Launch durations: absent in older projects.json, and they round-trip.
+chk(noFloor.launchSeconds.isEmpty && noFloor.previewLaunchSeconds.isEmpty, "launch time: absent → empty history")
+var timed = Project(name: "t", path: "/tmp/t", launchSeconds: [12.5, 11.0], previewLaunchSeconds: [3.25])
+if let d = try? JSONEncoder().encode(timed), let b = try? dec.decode(Project.self, from: d) {
+    chk(b.launchSeconds == [12.5, 11.0] && b.previewLaunchSeconds == [3.25], "launch time: history round-trips through projects.json")
+} else { chk(false, "launch time: round-trips") }
+timed.launchSeconds = []
+if let d = try? JSONEncoder().encode(timed), let b = try? dec.decode(Project.self, from: d) {
+    chk(b.launchSeconds.isEmpty && b.previewLaunchSeconds == [3.25], "launch time: dev and preview are independent")
+} else { chk(false, "launch time: independent") }
+
+// LaunchTiming: the ETA is the median of the last 5 launches, so one outlier can't wreck it.
+chk(LaunchTiming.eta([]) == nil, "eta: no history → nil")
+chk(LaunchTiming.eta([8]) == 8, "eta: one launch → that launch")
+chk(LaunchTiming.eta([8, 10]) == 9, "eta: even count → mean of the middle two")
+chk(LaunchTiming.eta([8, 9, 30]) == 9, "eta: a slow outlier (first launch after reboot) doesn't move it")
+chk(LaunchTiming.eta([30, 8, 9, 8.5, 9.5]) == 9, "eta: order doesn't matter")
+chk(LaunchTiming.record(7, into: [1, 2, 3, 4, 5]) == [2, 3, 4, 5, 7], "record: keeps the last 5, oldest dropped")
+chk(LaunchTiming.record(7, into: []) == [7], "record: first measurement")
+chk(LaunchTiming.record(0, into: [4]) == [4] && LaunchTiming.record(-1, into: [4]) == [4]
+    && LaunchTiming.record(.nan, into: [4]) == [4] && LaunchTiming.record(.infinity, into: [4]) == [4],
+    "record: zero, negative and non-finite durations are ignored")
+chk(LaunchTiming.eta(LaunchTiming.record(9, into: LaunchTiming.record(30, into: [8, 9, 8]))) == 9, "eta: recording an outlier keeps the median steady")
+
+// LaunchTiming.progress: elapsed / ETA, split at the moment the server prints its URL, capped at 95 %.
+func prog(_ e: Double, eta: Double?, marker: Double? = nil, seen: Double? = nil) -> Double? {
+    LaunchTiming.progress(elapsed: e, eta: eta, etaMarker: marker, markerElapsed: seen)
+}
+func near(_ a: Double?, _ b: Double) -> Bool { a.map { abs($0 - b) < 1e-9 } ?? false }
+chk(prog(5, eta: nil) == nil && prog(5, eta: 0) == nil, "progress: no ETA → nil")
+chk(near(prog(5, eta: 10), 0.5), "progress: no marker → elapsed / ETA")
+chk(near(prog(50, eta: 10), 0.95), "progress: capped at 95 % while still launching, however late it runs")
+chk(near(prog(-3, eta: 10), 0), "progress: never negative")
+// A 40 s launch whose URL usually appears at 30 s (a long compile, then a quick finish):
+chk(near(prog(15, eta: 40, marker: 30), 0.75 * 0.5), "progress: before the URL line, runs against the time-to-URL (15 of 30 s → 37.5 %)")
+chk((prog(30, eta: 40, marker: 30) ?? 1) < 0.75, "progress: …and doesn't reach the marker's share before the URL has appeared")
+chk((prog(60, eta: 40, marker: 30) ?? 1) < 0.75, "progress: …even when the compile runs far longer than usual")
+chk(near(prog(31, eta: 40, marker: 30, seen: 31), 0.75), "progress: the moment the URL prints it sits at the marker's share")
+chk(near(prog(36, eta: 40, marker: 30, seen: 31), 0.75 + 0.25 * 0.5), "progress: after it, runs against the time that is usually left (5 of 10 s)")
+chk(near(prog(100, eta: 40, marker: 30, seen: 31), 0.95), "progress: after the URL, still capped at 95 %")
+chk(near(prog(5, eta: 10, marker: 10), 0.5) && near(prog(5, eta: 10, marker: 20), 0.5), "progress: a marker not before the total is ignored (plain elapsed / ETA)")
+chk(near(prog(5, eta: 10, marker: 0), 0.5), "progress: a zero marker is ignored")
 if let d = try? JSONEncoder().encode(climbed), let b = try? dec.decode(Project.self, from: d) {
     chk(b.heapFloorGB == 4, "floor: round-trips through projects.json")
 } else { chk(false, "floor: round-trips through projects.json") }

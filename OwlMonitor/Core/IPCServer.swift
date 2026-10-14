@@ -68,32 +68,7 @@ final class IPCServer {
         case "status":
             // Report EVERY persisted project (not just live sessions), so `status` matches
             // projects.json and a crashed/idle project still appears (and exposes its log path).
-            let servers = app.projects
-                .sorted { $0.name < $1.name }
-                .map { p -> IPCServerInfo in
-                    let s = app.sessions[p.id]
-                    let preview = app.previews[p.id]
-                    // Dev and preview are mutually exclusive per project (stopSiblings) — surface
-                    // whichever is actually active, so a running preview shows up in `status`/`--wait`
-                    // too, instead of always reporting the (idle) dev session.
-                    let active = (s?.state.isActive == true) ? s : (preview?.state.isActive == true ? preview : s)
-                    let build = app.builds[p.id]
-                    let building = build?.isRunning ?? false
-                    return IPCServerInfo(
-                        name: p.name, path: p.path,
-                        state: active?.state.label ?? "Idle",
-                        port: active?.effectivePort ?? p.port,
-                        logPath: p.logFileURL.path,
-                        buildLogPath: p.buildLogFileURL.path,
-                        ready: active?.isReady ?? false,
-                        url: active.flatMap { $0.isReady ? $0.url : nil },
-                        pid: (active?.pid).flatMap { $0 > 0 ? Int($0) : nil },
-                        exitCode: (active?.lastExitCode).map { Int($0) },
-                        lastError: active?.lastError,
-                        building: building ? true : nil,
-                        buildElapsed: building ? build?.startedAt.map { Date().timeIntervalSince($0) } : nil,
-                        buildETA: building ? p.lastBuildSeconds : nil)
-                }
+            let servers = app.projects.sorted { $0.name < $1.name }.map { Self.serverInfo(for: $0, app: app) }
             IPCIO.write(client, IPCMessage(type: "status", servers: servers))
 
         case "run", "up":
@@ -191,7 +166,23 @@ final class IPCServer {
             }
 
         case "stop":
-            if req.all == true {
+            if req.force == true {
+                // Close everything for the project (or for every project with --all): see forceClose.
+                let targets: [Project]
+                if req.all == true { targets = app.projects }
+                else if let path = req.path, let p = app.projects.first(where: { $0.path == path }) { targets = [p] }
+                else {
+                    IPCIO.write(client, IPCMessage(type: "error",
+                        message: "no project tracked for this path (use --all to close everything)"))
+                    return
+                }
+                for project in targets {
+                    let r = await app.forceClose(project)
+                    let what = r.closed.isEmpty ? "nothing was running" : "stopped \(r.closed.joined(separator: ", "))"
+                    let orphans = r.orphans > 0 ? "; reaped \(r.orphans) orphaned process tree\(r.orphans == 1 ? "" : "s")" : ""
+                    IPCIO.write(client, IPCMessage(type: "ok", message: "closed \(project.name): \(what)\(orphans)"))
+                }
+            } else if req.all == true {
                 app.stopAllSessions()
                 IPCIO.write(client, IPCMessage(type: "ok", message: "stopped all servers"))
             } else if let path = req.path, let project = app.projects.first(where: { $0.path == path }) {
@@ -227,9 +218,120 @@ final class IPCServer {
             app.removeProject(project.id)   // stops its server/build, then forgets it
             IPCIO.write(client, IPCMessage(type: "ok", message: "removed \(name)"))
 
+        case "awake":
+            // Keep-awake is the same SleepGuard the toolbar cup drives, so what the CLI does is what the
+            // app shows. Replies with the state AFTER the action, so the caller sees what really happened.
+            let guardian = app.sleepGuard
+            switch req.sub ?? "status" {
+            case "status": break
+            case "off": guardian.disable()
+            case "add":
+                guard let m = req.minutes, (1...1440).contains(m) else {
+                    IPCIO.write(client, IPCMessage(type: "error", message: "awake add needs minutes between 1 and 1440"))
+                    return
+                }
+                guardian.add(TimeInterval(m) * 60)
+            default:
+                IPCIO.write(client, IPCMessage(type: "error", message: "unknown awake command (use status, add <minutes>, off)"))
+                return
+            }
+            let snap = guardian.snapshot()
+            IPCIO.write(client, IPCMessage(type: "ok", message: req.json == true ? snap.json : snap.text))
+
+        case "quota":
+            guard let claude = app.claudeQuota, let codex = app.codexQuota else {
+                IPCIO.write(client, IPCMessage(type: "error", message: "quota monitors not ready yet — try again in a moment"))
+                return
+            }
+            // The Codex monitor normally starts only when the notch is switched to GPT; the first ask
+            // starts it (once — it then refreshes itself every 10 min), so the first reply may say `pending`.
+            codex.ensureRunning()
+            // `quota show claude|codex` and `quota toggle` change what the notch shows (the same switch as
+            // clicking it); they return at once with the new state.
+            switch req.sub {
+            case "claude": app.showQuota(.claude)
+            case "codex": app.showQuota(.gpt)
+            case "toggle": app.showQuota(app.shownQuotaSource == .claude ? .gpt : .claude)
+            case nil: break
+            default:
+                IPCIO.write(client, IPCMessage(type: "error", message: "unknown quota command (use show claude|codex, toggle)"))
+                return
+            }
+            if req.refresh == true {
+                let before = (claude.updatedAt, codex.updatedAt)
+                claude.refresh(); codex.refresh()
+                // Wait for both to publish (a Claude probe takes a few seconds), but never forever.
+                for _ in 0..<40 {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    if claude.updatedAt != before.0, codex.updatedAt != before.1 { break }
+                }
+            }
+            let c = Self.quotaProvider(claude), x = Self.quotaProvider(codex)
+            let shown = app.shownQuotaSource == .gpt ? "codex" : "claude"
+            IPCIO.write(client, IPCMessage(type: "ok",
+                message: req.json == true ? QuotaReport.json(claude: c, codex: x, shown: shown)
+                                          : QuotaReport.text(claude: c, codex: x, shown: shown)))
+
         default:
             IPCIO.write(client, IPCMessage(type: "error", message: "unknown command"))
         }
+    }
+
+    /// One project's entry in `status`: its state, port, logs, icon and build coordination.
+    private static func serverInfo(for p: Project, app: AppState) -> IPCServerInfo {
+        let s = app.sessions[p.id]
+        let preview = app.previews[p.id]
+        // Dev and preview are mutually exclusive per project (stopSiblings) — surface whichever is
+        // actually active, so a running preview shows up in `status`/`--wait` too, instead of always
+        // reporting the (idle) dev session.
+        let active: DevSession?
+        if s?.state.isActive == true { active = s }
+        else if preview?.state.isActive == true { active = preview }
+        else { active = s }
+        let build = app.builds[p.id]
+        let building = build?.isRunning ?? false
+
+        var info = IPCServerInfo(name: p.name, path: p.path, state: active?.state.label ?? "Idle",
+                                 port: active?.effectivePort ?? p.port, logPath: p.logFileURL.path)
+        info.buildLogPath = p.buildLogFileURL.path
+        info.iconPath = ProjectIconView.faviconPath(for: p.path)
+        info.iconSymbol = p.framework.symbolName
+        info.ready = active?.isReady ?? false
+        info.url = active.flatMap { $0.isReady ? $0.url : nil }
+        info.pid = (active?.pid).flatMap { $0 > 0 ? Int($0) : nil }
+        info.exitCode = (active?.lastExitCode).map { Int($0) }
+        info.lastError = active?.lastError
+        if let active, let elapsed = active.launchElapsed {
+            info.launchElapsed = elapsed
+            let isPreview = active === preview
+            let eta = LaunchTiming.eta(isPreview ? p.previewLaunchSeconds : p.launchSeconds)
+            info.launchETA = eta
+            info.launchProgress = LaunchTiming.progress(
+                elapsed: elapsed, eta: eta,
+                etaMarker: LaunchTiming.eta(isPreview ? p.previewLaunchUrlSeconds : p.launchUrlSeconds),
+                markerElapsed: active.launchUrlElapsed)
+        }
+        if building {
+            info.building = true
+            info.buildElapsed = build?.startedAt.map { Date().timeIntervalSince($0) }
+            info.buildETA = p.lastBuildSeconds
+        }
+        return info
+    }
+
+    private static func quotaProvider(_ m: ClaudeQuotaMonitor) -> QuotaReport.Provider {
+        .init(status: m.status, stale: m.isStale, updatedAt: m.updatedAt,
+              session: m.fiveHour.map { .init(usedPercent: $0, resetsAt: m.fiveHourResetsAt, windowMinutes: 300) },
+              weekly: m.sevenDay.map { .init(usedPercent: $0, resetsAt: m.sevenDayResetsAt, windowMinutes: 10080) })
+    }
+
+    private static func quotaProvider(_ m: CodexQuotaMonitor) -> QuotaReport.Provider {
+        let windows = [m.primary, m.secondary].compactMap { $0 }.map {
+            QuotaReport.Window(usedPercent: $0.usedPercent, resetsAt: $0.resetsAt, windowMinutes: $0.durationMinutes)
+        }
+        let c = QuotaReport.classify(windows)
+        return .init(status: m.status, stale: m.isStale, updatedAt: m.updatedAt,
+                     session: c.session, weekly: c.weekly, other: c.other)
     }
 
     /// Resolve the request's `path` to a known (or newly added) project. Writes an error and returns

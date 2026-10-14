@@ -98,6 +98,17 @@ struct Project: Identifiable, Codable, Hashable, Sendable {
     /// relaunch or reinstall instead of running blind until the session's first build finishes. `nil`
     /// until the first successful build.
     var lastBuildSeconds: TimeInterval?
+    /// How long the last few dev-server launches took to answer their first health probe (launching →
+    /// ready), in seconds, oldest first, at most `LaunchTiming.keep`. Their median is the ETA for the next
+    /// launch's progress (`LaunchTiming.eta`). Empty until a launch has reached ready. The production
+    /// preview keeps its own.
+    var launchSeconds: [TimeInterval]
+    var previewLaunchSeconds: [TimeInterval]
+    /// Seconds from the start of those launches to the moment the server printed its URL, when it did
+    /// (parallel history, only launches that printed one before answering). Lets the progress follow the
+    /// server's own milestone — see `LaunchTiming.progress`.
+    var launchUrlSeconds: [TimeInterval]
+    var previewLaunchUrlSeconds: [TimeInterval]
     /// The smallest dev-server heap (GB) this project has PROVEN it needs: set whenever the OOM
     /// autoscaler escalates, so the shared-memory budget (`MemoryGuard.budgetedHeapGB`) never squeezes
     /// it back below a level it already ran out of memory at. nil until the first out-of-memory.
@@ -136,6 +147,10 @@ struct Project: Identifiable, Codable, Hashable, Sendable {
         buildMemoryAuto: Bool = true,
         buildAutoHeapGB: Int = HeapScaling.firstGB,
         lastBuildSeconds: TimeInterval? = nil,
+        launchSeconds: [TimeInterval] = [],
+        previewLaunchSeconds: [TimeInterval] = [],
+        launchUrlSeconds: [TimeInterval] = [],
+        previewLaunchUrlSeconds: [TimeInterval] = [],
         heapFloorGB: Int? = nil,
         env: [EnvVar] = []
     ) {
@@ -159,6 +174,10 @@ struct Project: Identifiable, Codable, Hashable, Sendable {
         self.buildMemoryAuto = buildMemoryAuto
         self.buildAutoHeapGB = buildAutoHeapGB
         self.lastBuildSeconds = lastBuildSeconds
+        self.launchSeconds = launchSeconds
+        self.previewLaunchSeconds = previewLaunchSeconds
+        self.launchUrlSeconds = launchUrlSeconds
+        self.previewLaunchUrlSeconds = previewLaunchUrlSeconds
         self.heapFloorGB = heapFloorGB
         self.env = env
     }
@@ -169,7 +188,7 @@ struct Project: Identifiable, Codable, Hashable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, name, path, groupRoot, packageManager, framework, devCommand, buildCommand, workerCommand, previewCommand
         case memoryGB, memoryAuto, port, healthPath, packageManagerAuto
-        case autoHeapGB, buildMemoryGB, buildMemoryAuto, buildAutoHeapGB, lastBuildSeconds, heapFloorGB, env
+        case autoHeapGB, buildMemoryGB, buildMemoryAuto, buildAutoHeapGB, lastBuildSeconds, launchSeconds, previewLaunchSeconds, launchUrlSeconds, previewLaunchUrlSeconds, heapFloorGB, env
     }
 
     init(from decoder: Decoder) throws {
@@ -197,6 +216,10 @@ struct Project: Identifiable, Codable, Hashable, Sendable {
         buildMemoryAuto = try c.decodeIfPresent(Bool.self, forKey: .buildMemoryAuto) ?? memoryAuto
         buildAutoHeapGB = try c.decodeIfPresent(Int.self, forKey: .buildAutoHeapGB) ?? HeapScaling.firstGB
         lastBuildSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .lastBuildSeconds)
+        launchSeconds = try c.decodeIfPresent([TimeInterval].self, forKey: .launchSeconds) ?? []
+        previewLaunchSeconds = try c.decodeIfPresent([TimeInterval].self, forKey: .previewLaunchSeconds) ?? []
+        launchUrlSeconds = try c.decodeIfPresent([TimeInterval].self, forKey: .launchUrlSeconds) ?? []
+        previewLaunchUrlSeconds = try c.decodeIfPresent([TimeInterval].self, forKey: .previewLaunchUrlSeconds) ?? []
         heapFloorGB = try c.decodeIfPresent(Int.self, forKey: .heapFloorGB)
         env = try c.decodeIfPresent([EnvVar].self, forKey: .env) ?? []
     }

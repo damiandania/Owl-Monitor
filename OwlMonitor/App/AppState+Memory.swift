@@ -29,6 +29,44 @@ extension AppState {
         stopOtherServers(keeping: projectID.flatMap { id in projects.first { $0.id == id } })
     }
 
+    // MARK: - Force close
+
+    /// Close EVERYTHING Owl Monitor runs for `project`, and leave it as if it had never been launched —
+    /// what `owl-monitor stop <path> --force` does. Unlike a plain stop (which keeps the runner, so the
+    /// project stays in the notch as "Stopped"), this drops the dev server, preview, worker and build
+    /// outright (its state reads "Idle" and the notch no longer lists it) and then reaps any process
+    /// of THIS project that is still running unsupervised — a tree left behind by a crash.
+    ///
+    /// Only what Owl Monitor started or tracks is touched: the orphan sweep goes by the ownership tag
+    /// every launch carries (`OrphanReaper`), never by folder or command line, so the user's editor,
+    /// terminals and Claude sessions in that folder are safe. The project itself is kept (that is
+    /// `remove`). Returns immediately; the trees finish dying within ~2 s (SIGTERM, then SIGKILL).
+    func forceClose(_ project: Project) async -> (closed: [String], orphans: Int) {
+        let id = project.id
+        var closed: [String] = []
+        if sessions[id]?.state.isActive == true { closed.append("server") }
+        if previews[id]?.state.isActive == true { closed.append("preview") }
+        if workers[id]?.isRunning == true { closed.append("worker") }
+        if builds[id]?.isRunning == true { closed.append("build") }
+
+        closeServer(id: id)
+        closePreview(id: id)
+        closeWorker(id: id)
+        closeBuild(id: id)
+        lastConnectionAt["dev:\(id)"] = nil
+        lastConnectionAt["preview:\(id)"] = nil
+
+        // What is still supervised is now every OTHER project's runners; anything tagged with this
+        // project's id that remains is, by definition, a leftover.
+        let supervised = supervisedRunnerKeys
+        let orphans = await Task.detached(priority: .userInitiated) {
+            OrphanReaper.scan(supervised: supervised).filter { $0.projectID == id }
+        }.value
+        OrphanReaper.reap(orphans)
+        AppLog.shared.event("Force close: \(project.name) — closed \(closed.isEmpty ? "nothing running" : closed.joined(separator: ", ")), reaped \(orphans.count) orphan(s)")
+        return (closed, orphans.count)
+    }
+
     // MARK: - Idle auto-stop
 
     /// Stop dev servers and previews nobody has used for `settings.idleStopMinutes` (off at 0).

@@ -7,6 +7,11 @@ struct IPCRequest: Codable, Sendable {
     var name: String?        // reserved
     var gb: Int?             // heap override (run/up: dev heap; preview: build heap)
     var all: Bool?           // stop: stop every supervised server, not just this path's
+    var sub: String?         // awake: "status" | "add" | "off"
+    var minutes: Int?        // awake add: minutes to add
+    var json: Bool?          // awake / quota: reply with JSON instead of a human line
+    var refresh: Bool?       // quota: re-read the providers and wait for fresh numbers
+    var force: Bool?         // stop: close EVERYTHING for the project (see AppState.forceClose)
 }
 
 struct IPCServerInfo: Codable, Sendable {
@@ -36,6 +41,19 @@ struct IPCServerInfo: Codable, Sendable {
     /// A build is currently running for this project. (Defaults keep older call sites — e.g. the
     /// IPC test — constructing `IPCServerInfo` without the build fields.)
     var building: Bool? = nil
+    /// Absolute path of the file the app shows as this project's icon (its favicon), or nil when it has
+    /// none and the app falls back to `iconSymbol`.
+    var iconPath: String? = nil
+    /// SF Symbol the app uses when there is no favicon (the framework's symbol).
+    var iconSymbol: String? = nil
+    /// While the server is "Launching…": seconds since the launch began, and the expected TOTAL (the median
+    /// of the last few launch times to become ready — same meaning as `buildETA`). `launchETA` is nil with no
+    /// previous measurement. Both nil in every other state (including "Recycling…").
+    var launchElapsed: Double? = nil
+    var launchETA: Double? = nil
+    /// Ready-made launch progress, 0...0.95 (`ready` fills the rest): elapsed / ETA, split at the moment the
+    /// server prints its URL when that is known (see `LaunchTiming.progress`). nil with no ETA.
+    var launchProgress: Double? = nil
     /// Seconds since the current build started.
     var buildElapsed: Double? = nil
     /// Expected total build seconds (the last successful build's duration), for an ETA.

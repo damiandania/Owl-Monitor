@@ -133,6 +133,18 @@ extension AppState {
 
     /// Persist the last successful build's wall-clock duration — the ETA for the next build's
     /// progress bar. Survives relaunch/reinstall (it rides along in projects.json).
+    /// Remember how long a launch took to become ready; the median of the last few is the ETA for the next.
+    func recordLaunch(_ seconds: TimeInterval, urlAt: TimeInterval?, preview: Bool, for id: Project.ID) {
+        mutate(id) {
+            if preview {
+                $0.previewLaunchSeconds = LaunchTiming.record(seconds, into: $0.previewLaunchSeconds)
+                if let urlAt { $0.previewLaunchUrlSeconds = LaunchTiming.record(urlAt, into: $0.previewLaunchUrlSeconds) }
+            } else {
+                $0.launchSeconds = LaunchTiming.record(seconds, into: $0.launchSeconds)
+                if let urlAt { $0.launchUrlSeconds = LaunchTiming.record(urlAt, into: $0.launchUrlSeconds) }
+            }
+        }
+    }
     func setLastBuildSeconds(_ seconds: TimeInterval, for id: Project.ID) { mutate(id) { $0.lastBuildSeconds = seconds } }
 
     /// Manually override the package manager → regenerate the dev/build commands for it.

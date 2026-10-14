@@ -268,6 +268,23 @@ final class AppState {
         NSApp.windows.first { $0.identifier?.rawValue == "main" }?.makeKeyAndOrderFront(nil)
     }
 
+    /// The Claude / Codex quota monitors, set once at launch by `AppDelegate` (which owns them). The IPC
+    /// hub reads them for `owl-monitor quota`.
+    @ObservationIgnored var claudeQuota: ClaudeQuotaMonitor?
+    @ObservationIgnored var codexQuota: CodexQuotaMonitor?
+    /// Which provider the notch's quota readout shows. One source of truth for the click on the notch
+    /// and `owl-monitor quota show` — change it through `showQuota(_:)`, so the notch redraws.
+    @ObservationIgnored private(set) var shownQuotaSource: QuotaSource = .claude
+    /// Set by the notch controller: redraw after the shown provider changed.
+    @ObservationIgnored var quotaSourceDidChange: (() -> Void)?
+
+    func showQuota(_ source: QuotaSource) {
+        guard source != shownQuotaSource else { return }
+        shownQuotaSource = source
+        if source == .gpt { codexQuota?.ensureRunning() }
+        quotaSourceDidChange?()
+    }
+
     /// Physical RAM in whole GB — the ceiling for any injected heap.
     var systemRAMGB: Int { max(1, Int((systemSampler.totalMem / 1_073_741_824).rounded())) }
 
@@ -293,6 +310,7 @@ final class AppState {
         // Persist the heap level the OOM autoscaler learns (AUTO mode), so the next launch starts
         // there instead of replaying 4→6→8 — and as the floor the shared-memory budget respects.
         session.onHeapEscalated = { [weak self] gb in self?.recordHeapEscalation(gb, for: project.id) }
+        session.onLaunchMeasured = { [weak self] s, url in self?.recordLaunch(s, urlAt: url, preview: false, for: project.id) }
         sessions[project.id] = session
         let heapGB = launchHeapGB(for: project, preview: false)
         session.start(memoryGB: heapGB, reservedPorts: reservedPorts(excluding: project.id))
@@ -421,7 +439,7 @@ final class AppState {
 
     /// `<id>:<kind>` of every runner that's live right now — the tag a process must carry to count as
     /// supervised rather than orphaned (see OrphanReaper).
-    private var supervisedRunnerKeys: Set<String> {
+    var supervisedRunnerKeys: Set<String> {
         var keys = Set<String>()
         for (id, s) in sessions where s.state.isActive { keys.insert(OrphanReaper.key(projectID: id, kind: "dev")) }
         for (id, p) in previews where p.state.isActive { keys.insert(OrphanReaper.key(projectID: id, kind: "preview")) }
@@ -547,6 +565,7 @@ final class AppState {
         stopSiblings(of: "preview", for: project)   // only one of dev/build/preview runs per project
         let preview = DevSession(project: project, commandOverride: cmd)
         previews[project.id] = preview
+        preview.onLaunchMeasured = { [weak self] s, url in self?.recordLaunch(s, urlAt: url, preview: true, for: project.id) }
         let heapGB = launchHeapGB(for: project, preview: true)
         preview.start(memoryGB: heapGB, reservedPorts: reservedPorts(excluding: project.id))
         warnLowMemory(heapGB: heapGB, name: "\(project.name) · preview", projectID: project.id)
